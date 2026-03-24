@@ -14,7 +14,7 @@ Agent Instructions (embed in system prompt):
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Dict, Optional
 
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -26,6 +26,20 @@ from vault.archiver import (
 )
 
 reallog = RealLog()
+
+# Import GitHub scout tools
+GITHUB_AVAILABLE = False
+try:
+    # Check if scouts.github module exists
+    import importlib.util
+    spec = importlib.util.find_spec("scouts.github")
+    if spec is not None:
+        from scouts.github import get_github_tools, handle_github_tool
+        GITHUB_AVAILABLE = True
+    else:
+        GITHUB_AVAILABLE = False
+except ImportError:
+    GITHUB_AVAILABLE = False
 
 
 # --- MCP Tool Definitions ---
@@ -146,14 +160,14 @@ def handle_log_dehydrate(arguments: dict) -> dict:
     entities = None
     if arguments.get("force_entities"):
         entities = [
-            PIIEntity(log_id="", real_value=e["real_value"], entity_type=e["entity_type"])
+            PIIEntity(entity_id="", real_value=e["real_value"], entity_type=e["entity_type"])
             for e in arguments["force_entities"]
         ]
     dehydrated, ents = reallog.dehydrate(text, entities)
     return {
         "dehydrated_text": dehydrated,
         "entities_detected": len(ents),
-        "entities": [{"log_id": e.log_id, "type": e.entity_type} for e in ents]
+        "entities": [{"log_id": e.entity_id, "type": e.entity_type} for e in ents]
     }
 
 

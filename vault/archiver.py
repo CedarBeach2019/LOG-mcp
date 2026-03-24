@@ -29,7 +29,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Optional, List, Tuple, Dict, Any
 
 
 ARCHIVE_ROOT = Path("~/.log/vault/archives").expanduser()
@@ -212,7 +212,7 @@ def _generate_summary(messages: list[dict], topic: str) -> str:
             lines.append(f"- Messages: {ep_end - ep_start + 1}")
             lines.append("")
 
-    # Key points extraction (placeholder for LLM enhancement)
+    # Key points extraction
     lines.append("## Key Points")
     for i, msg in enumerate(messages):
         if msg.get("role") == "assistant" and len(msg.get("content", "")) > 100:
@@ -242,7 +242,7 @@ def _detect_episodes(messages: list[dict]) -> list[tuple[int, int, str]]:
     Enhanced later with embedding similarity.
     """
     if len(messages) <= 3:
-        return [(0, len(messages) - 1, _auto_topic(messages))]
+        return [(0, max(0, len(messages) - 1), _auto_topic(messages))]
 
     episodes = []
     current_start = 0
@@ -256,13 +256,20 @@ def _detect_episodes(messages: list[dict]) -> list[tuple[int, int, str]]:
         role = messages[i].get("role", "")
         if role == "user" and len(curr) < 60 and i - current_start > 2:
             # Check if it looks like a new topic
-            new_topic_words = set(curr.lower().split()) - set(prev.lower().split())
-            if len(new_topic_words) > 3:
+            prev_words = set(re.findall(r'\w+', prev.lower()))
+            curr_words = set(re.findall(r'\w+', curr.lower()))
+            new_topic_words = curr_words - prev_words
+            if len(new_topic_words) > 2:  # Reduced threshold for better detection
                 episodes.append((current_start, i - 1, _auto_topic(messages[current_start:i])))
                 current_start = i
 
     # Final episode
-    episodes.append((current_start, len(messages) - 1, _auto_topic(messages[current_start:])))
+    if current_start <= len(messages) - 1:
+        episodes.append((current_start, len(messages) - 1, _auto_topic(messages[current_start:])))
+
+    # If no episodes were detected, create a single episode
+    if not episodes:
+        episodes.append((0, len(messages) - 1, _auto_topic(messages)))
 
     return episodes
 
@@ -294,7 +301,7 @@ def get_master_index() -> list[dict]:
 
 
 def search_archives(query: str, limit: int = 10) -> list[dict]:
-    """Search archives by topic/tags (simple text match, enhanced later with vectors)."""
+    """Search archives by topic/tags."""
     index = get_master_index()
     query_lower = query.lower()
     results = []

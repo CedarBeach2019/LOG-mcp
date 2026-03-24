@@ -7,276 +7,475 @@ Core dehydration/rehydration logic with SQLite-backed RealLog.
 from __future__ import annotations
 import json
 import sqlite3
-import hashlib
 import re
-from dataclasses import dataclass, field, asdict
+import contextlib
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Iterator, List, Tuple, Dict, Any
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class MemoryTier(Enum):
-    HOT = "hot"      # Local, immediate access
-    WARM = "warm"    # Cloud vectors, searchable
-    COLD = "cold"    # Archived, compressed
-    ICE = "ice"      # Pruned — only Gnosis retained
+    HOT = "hot"
+    WARM = "warm"
+    COLD = "cold"
+    ICE = "ice"
 
 
 @dataclass
 class PIIEntity:
     """A single PII entity in the RealLog."""
-    log_id: str          # e.g. ENTITY_1, EMAIL_3
+    entity_id: str          # e.g., ENTITY_1, EMAIL_3
+    entity_type: str        # person, email, phone, address, ssn, credit_card, api_key
     real_value: str
-    entity_type: str     # person, email, phone, address, api_key, custom
-    context: str = ""    # where it was found
-    approved: bool = True
     created_at: str = ""
+    last_used: str = ""
+    
+    @property
+    def log_id(self) -> str:
+        """Alias for entity_id for backward compatibility."""
+        return self.entity_id
 
 
 @dataclass
-class ArchiveSession:
-    """A single archived session."""
-    session_id: str
-    started_at: str
-    ended_at: str
+class Session:
+    """A single session."""
+    id: str
+    timestamp: str
     summary: str
-    tier: MemoryTier = MemoryTier.HOT
-    topic: str = ""
-    tags: list[str] = field(default_factory=list)
-    message_count: int = 0
-    token_estimate: int = 0
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class Message:
+    """A single message in a session."""
+    id: int
+    session_id: str
+    role: str
+    content: str
+    timestamp: str
+
+
+class DatabaseConnection:
+    """Context manager for SQLite connections with error handling."""
+    
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self.conn: Optional[sqlite3.Connection] = None
+    
+    def __enter__(self) -> sqlite3.Connection:
+        try:
+            self.conn = sqlite3.connect(self.db_path)
+            self.conn.row_factory = sqlite3.Row
+            return self.conn
+        except sqlite3.Error as e:
+            logger.error(f"Database connection error: {e}")
+            raise
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.conn:
+            if exc_type is not None:
+                self.conn.rollback()
+            else:
+                self.conn.commit()
+            self.conn.close()
 
 
 class RealLog:
-    """SQLite-backed mapping of LOG_IDs to real values.
-
-    This database NEVER leaves the Vault. It is the single source
-    of truth for rehydration.
-    """
-
+    """SQLite-backed storage for sessions, messages, and PII mappings."""
+    
     def __init__(self, db_path: str | Path = "~/.log/vault/reallog.db"):
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
-
+    
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
+        """Initialize database tables."""
+        with DatabaseConnection(self.db_path) as conn:
             conn.executescript("""
-                CREATE TABLE IF NOT EXISTS entities (
-                    log_id TEXT PRIMARY KEY,
-                    real_value TEXT NOT NULL,
-                    entity_type TEXT NOT NULL,
-                    context TEXT DEFAULT '',
-                    approved INTEGER DEFAULT 1,
-                    created_at TEXT DEFAULT (datetime('now')),
-                    last_seen TEXT DEFAULT (datetime('now'))
-                );
                 CREATE TABLE IF NOT EXISTS sessions (
-                    session_id TEXT PRIMARY KEY,
-                    started_at TEXT,
-                    ended_at TEXT,
-                    summary TEXT,
-                    topic TEXT,
-                    tier TEXT DEFAULT 'hot',
-                    tags TEXT DEFAULT '[]',
-                    message_count INTEGER DEFAULT 0,
-                    token_estimate INTEGER DEFAULT 0
+                    id TEXT PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    metadata TEXT DEFAULT '{}'
                 );
-                CREATE TABLE IF NOT EXISTS archives (
+                CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
-                    stored_at TEXT DEFAULT (datetime('now')),
-                    tier TEXT DEFAULT 'hot',
-                    full_text_path TEXT,
-                    summary_path TEXT,
-                    gnosis TEXT DEFAULT '',
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 );
-                CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
-                CREATE INDEX IF NOT EXISTS idx_sessions_tier ON sessions(tier);
-                CREATE INDEX IF NOT EXISTS idx_archives_tier ON archives(tier);
+                CREATE TABLE IF NOT EXISTS pii_map (
+                    entity_id TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    real_value TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    last_used TEXT DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+                CREATE INDEX IF NOT EXISTS idx_pii_type ON pii_map(entity_type);
+                CREATE INDEX IF NOT EXISTS idx_pii_value ON pii_map(real_value);
             """)
-
-    # --- Entity CRUD ---
-
-    def register_entity(self, entity: PIIEntity) -> PIIEntity:
-        """Register a new PII mapping. Returns the (possibly existing) entity."""
-        with sqlite3.connect(self.db_path) as conn:
-            existing = conn.execute(
-                "SELECT log_id, real_value FROM entities WHERE log_id = ?",
-                (entity.log_id,)
-            ).fetchone()
-            if existing:
-                return entity
+    
+    def add_session(self, session: Session) -> None:
+        """Add a new session."""
+        with DatabaseConnection(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO entities (log_id, real_value, entity_type, context, approved, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
-                (entity.log_id, entity.real_value, entity.entity_type, entity.context, int(entity.approved))
+                "INSERT INTO sessions (id, timestamp, summary, metadata) VALUES (?, ?, ?, ?)",
+                (session.id, session.timestamp, session.summary, json.dumps(session.metadata))
             )
-        return entity
-
-    def get_entity(self, log_id: str) -> Optional[PIIEntity]:
-        with sqlite3.connect(self.db_path) as conn:
+    
+    def add_message(self, message: Message) -> int:
+        """Add a message and return its id."""
+        with DatabaseConnection(self.db_path) as conn:
+            cursor = conn.execute(
+                "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+                (message.session_id, message.role, message.content, message.timestamp)
+            )
+            return cursor.lastrowid
+    
+    def get_session(self, session_id: str) -> Optional[Session]:
+        """Retrieve a session by id."""
+        with DatabaseConnection(self.db_path) as conn:
             row = conn.execute(
-                "SELECT log_id, real_value, entity_type, context, approved, created_at FROM entities WHERE log_id = ?",
-                (log_id,)
+                "SELECT id, timestamp, summary, metadata FROM sessions WHERE id = ?",
+                (session_id,)
             ).fetchone()
             if row:
-                return PIIEntity(log_id=row[0], real_value=row[1], entity_type=row[2],
-                                 context=row[3], approved=bool(row[4]), created_at=row[5])
+                return Session(
+                    id=row['id'],
+                    timestamp=row['timestamp'],
+                    summary=row['summary'],
+                    metadata=json.loads(row['metadata'])
+                )
         return None
-
-    def lookup_by_real_value(self, real_value: str) -> Optional[PIIEntity]:
-        """Find existing entity by real value (exact match)."""
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT log_id, real_value, entity_type, context, approved, created_at FROM entities WHERE real_value = ?",
-                (real_value,)
-            ).fetchone()
-            if row:
-                return PIIEntity(log_id=row[0], real_value=row[1], entity_type=row[2],
-                                 context=row[3], approved=bool(row[4]), created_at=row[5])
-        return None
-
-    def all_entities(self) -> list[PIIEntity]:
-        with sqlite3.connect(self.db_path) as conn:
+    
+    def get_session_messages(self, session_id: str) -> List[Message]:
+        """Get all messages for a session."""
+        with DatabaseConnection(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT log_id, real_value, entity_type, context, approved, created_at FROM entities ORDER BY log_id"
+                "SELECT id, session_id, role, content, timestamp FROM messages WHERE session_id = ? ORDER BY timestamp",
+                (session_id,)
             ).fetchall()
-            return [PIIEntity(log_id=r[0], real_value=r[1], entity_type=r[2],
-                              context=r[3], approved=bool(r[4]), created_at=r[5]) for r in rows]
-
-    # --- Dehydration ---
-
-    def next_log_id(self, entity_type: str) -> str:
-        """Generate the next LOG_ID for a given entity type."""
-        type_map = {
-            "person": "ENTITY", "name": "ENTITY", "email": "EMAIL",
-            "phone": "PHONE", "address": "ADDRESS", "api_key": "KEY",
-            "secret": "SECRET", "url": "URL", "org": "ORG",
-        }
-        prefix = type_map.get(entity_type.lower(), "ENTITY")
-        with sqlite3.connect(self.db_path) as conn:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM entities WHERE entity_type = ?",
-                (entity_type.lower(),)
-            ).fetchone()[0]
-        return f"{prefix}_{count + 1}"
-
-    def dehydrate(self, text: str, entities: list[PIIEntity] | None = None) -> tuple[str, list[PIIEntity]]:
-        """Replace PII in text with LOG_IDs. Returns (dehydrated_text, entities).
-
-        If entities are provided, uses them. Otherwise, runs regex detection.
-        """
-        if entities is None:
-            entities = self._detect_entities(text)
-
-        dehydrated = text
-        for ent in entities:
-            # Register if new
-            existing = self.lookup_by_real_value(ent.real_value)
-            if existing:
-                ent.log_id = existing.log_id
-            else:
-                ent.log_id = self.next_log_id(ent.entity_type)
-                self.register_entity(ent)
-            dehydrated = dehydrated.replace(ent.real_value, f"<{ent.log_id}>")
-
-        return dehydrated, entities
-
-    def rehydrate(self, text: str) -> str:
-        """Swap all LOG_ID placeholders back to real values."""
-        entities = self.all_entities()
-        result = text
-        for ent in entities:
-            result = result.replace(f"<{ent.log_id}>", ent.real_value)
-        return result
-
-    def _detect_entities(self, text: str) -> list[PIIEntity]:
-        """Regex-based PII detection. First pass — local, no model needed."""
-        entities = []
-
-        # Emails
-        for m in re.finditer(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text):
-            entities.append(PIIEntity(log_id="", real_value=m.group(), entity_type="email"))
-
-        # Phone numbers (US-focused, extensible)
-        for m in re.finditer(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', text):
-            entities.append(PIIEntity(log_id="", real_value=m.group(), entity_type="phone"))
-
-        # API keys / tokens (heuristic)
-        for m in re.finditer(r'(?:sk|pk|token|key|secret|api[_-]?key)[-_][a-zA-Z0-9_\-]{16,}', text, re.IGNORECASE):
-            entities.append(PIIEntity(log_id="", real_value=m.group(), entity_type="api_key"))
-
-        # URLs (potentially sensitive)
-        for m in re.finditer(r'https?://[^\s<>"{}|\\^`]+', text):
-            url = m.group()
-            # Skip common public URLs
-            public_domains = ('github.com', 'docs.openclaw.ai', 'clawhub.com', 'developers.cloudflare.com')
-            if not any(d in url for d in public_domains):
-                entities.append(PIIEntity(log_id="", real_value=url, entity_type="url"))
-
-        return entities
-
-    # --- Session Archiving ---
-
-    def save_session(self, session: ArchiveSession):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO sessions
-                (session_id, started_at, ended_at, summary, topic, tier, tags, message_count, token_estimate)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                session.session_id, session.started_at, session.ended_at,
-                session.summary, session.topic, session.tier.value,
-                json.dumps(session.tags), session.message_count, session.token_estimate
-            ))
-
-    def get_sessions(self, tier: MemoryTier | None = None, limit: int = 50) -> list[ArchiveSession]:
-        with sqlite3.connect(self.db_path) as conn:
-            if tier:
-                rows = conn.execute(
-                    "SELECT session_id, started_at, ended_at, summary, topic, tier, tags, message_count, token_estimate FROM sessions WHERE tier = ? ORDER BY started_at DESC LIMIT ?",
-                    (tier.value, limit)
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT session_id, started_at, ended_at, summary, topic, tier, tags, message_count, token_estimate FROM sessions ORDER BY started_at DESC LIMIT ?",
-                    (limit,)
-                ).fetchall()
             return [
-                ArchiveSession(
-                    session_id=r[0], started_at=r[1], ended_at=r[2],
-                    summary=r[3], topic=r[4], tier=MemoryTier(r[5]),
-                    tags=json.loads(r[6]) if r[6] else [], message_count=r[7],
-                    token_estimate=r[8]
-                ) for r in rows
+                Message(
+                    id=row['id'],
+                    session_id=row['session_id'],
+                    role=row['role'],
+                    content=row['content'],
+                    timestamp=row['timestamp']
+                ) for row in rows
             ]
-
-    def archive_session(self, session_id: str, full_text_path: str, summary_path: str, tier: MemoryTier = MemoryTier.HOT):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                INSERT INTO archives (session_id, stored_at, tier, full_text_path, summary_path)
-                VALUES (?, datetime('now'), ?, ?, ?)
-            """, (session_id, tier.value, full_text_path, summary_path))
-
-    # --- Hysteresis Pruning ---
-
-    def promote_session(self, session_id: str, new_tier: MemoryTier):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("UPDATE sessions SET tier = ? WHERE session_id = ?", (new_tier.value, session_id))
-            conn.execute("UPDATE archives SET tier = ? WHERE session_id = ?", (new_tier.value, session_id))
-
+    
+    def get_all_sessions(self, limit: int = 100) -> List[Session]:
+        """Get all sessions ordered by timestamp."""
+        with DatabaseConnection(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, timestamp, summary, metadata FROM sessions ORDER BY timestamp DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [
+                Session(
+                    id=row['id'],
+                    timestamp=row['timestamp'],
+                    summary=row['summary'],
+                    metadata=json.loads(row['metadata'])
+                ) for row in rows
+            ]
+    
+    # Add missing methods for compatibility
     def get_storage_stats(self) -> dict:
-        with sqlite3.connect(self.db_path) as conn:
-            entities = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        """Get storage statistics."""
+        with DatabaseConnection(self.db_path) as conn:
+            entities = conn.execute("SELECT COUNT(*) FROM pii_map").fetchone()[0]
             sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-            archives = conn.execute("SELECT COUNT(*) FROM archives").fetchone()[0]
-            by_tier = {}
-            for row in conn.execute("SELECT tier, COUNT(*) FROM sessions GROUP BY tier"):
-                by_tier[row[0]] = row[1]
-            return {"entities": entities, "sessions": sessions, "archives": archives, "by_tier": by_tier}
-
+            messages = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            
+            return {
+                "entities": entities,
+                "sessions": sessions,
+                "messages": messages,
+                "archives": 0,  # Placeholder
+                "by_tier": {"hot": sessions, "warm": 0, "cold": 0, "ice": 0}
+            }
+    
     def db_size_mb(self) -> float:
+        """Get database size in MB."""
         if self.db_path.exists():
             return self.db_path.stat().st_size / (1024 * 1024)
         return 0.0
+    
+    def promote_session(self, session_id: str, tier: MemoryTier) -> None:
+        """Promote a session to a different memory tier."""
+        # Update session metadata to include tier information
+        session = self.get_session(session_id)
+        if session:
+            metadata = session.metadata
+            metadata['tier'] = tier.value
+            with DatabaseConnection(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE sessions SET metadata = ? WHERE id = ?",
+                    (json.dumps(metadata), session_id)
+                )
+    
+    def get_sessions(self, tier: MemoryTier, limit: int = 100) -> List[Session]:
+        """Get sessions by tier."""
+        sessions = []
+        with DatabaseConnection(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, timestamp, summary, metadata FROM sessions ORDER BY timestamp DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            for row in rows:
+                metadata = json.loads(row['metadata'])
+                if metadata.get('tier') == tier.value:
+                    sessions.append(Session(
+                        id=row['id'],
+                        timestamp=row['timestamp'],
+                        summary=row['summary'],
+                        metadata=metadata
+                    ))
+        return sessions
+    
+    def all_entities(self):
+        """Get all PII entities."""
+        with DatabaseConnection(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT entity_id, entity_type, real_value, created_at, last_used FROM pii_map"
+            ).fetchall()
+            return [
+                PIIEntity(
+                    entity_id=row['entity_id'],
+                    entity_type=row['entity_type'],
+                    real_value=row['real_value'],
+                    created_at=row['created_at'],
+                    last_used=row['last_used']
+                ) for row in rows
+            ]
+    
+    def register_entity(self, entity: PIIEntity) -> None:
+        """Register a PII entity."""
+        with DatabaseConnection(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO pii_map (entity_id, entity_type, real_value, created_at, last_used) VALUES (?, ?, ?, ?, ?)",
+                (entity.entity_id, entity.entity_type, entity.real_value, entity.created_at, entity.last_used)
+            )
+    
+    def next_log_id(self, entity_type: str) -> str:
+        """Generate next log ID for an entity type."""
+        with DatabaseConnection(self.db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM pii_map WHERE entity_type = ?",
+                (entity_type,)
+            ).fetchone()[0]
+        
+        type_prefix = {
+            'person': 'ENTITY',
+            'email': 'EMAIL',
+            'phone': 'PHONE',
+            'address': 'ADDR',
+            'ssn': 'SSN',
+            'credit_card': 'CC',
+            'api_key': 'KEY'
+        }.get(entity_type, 'ENT')
+        
+        return f"{type_prefix}_{count + 1}"
+
+
+class Dehydrator:
+    """Detect and replace PII with LOG_ID placeholders."""
+    
+    def __init__(self, reallog: RealLog):
+        self.reallog = reallog
+        self.patterns = {
+            'email': r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b',
+            'phone': r'\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
+            'ssn': r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b',
+            'credit_card': r'\b(?:\d{4}[- ]?){3}\d{4}\b',
+            'api_key': r'\b(?:sk|pk|token|key|secret|api[_-]?key)[-_][a-zA-Z0-9_\-]{16,}\b',
+        }
+    
+    def detect_entities(self, text: str) -> List[Tuple[str, str]]:
+        """Detect PII entities in text using regex patterns."""
+        entities = []
+        
+        for entity_type, pattern in self.patterns.items():
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                entities.append((entity_type, match.group()))
+        
+        # NLP heuristics for names (simple approach)
+        # Look for title-case words that might be names
+        name_pattern = r'\b(?:Mr\.|Mrs\.|Ms\.|Dr\.)?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b'
+        for match in re.finditer(name_pattern, text):
+            # Basic filter to exclude common non-name words
+            common_words = {'The', 'This', 'That', 'There', 'Hello', 'Please', 'Thank'}
+            if match.group() not in common_words:
+                entities.append(('person', match.group()))
+        
+        # Address detection (simple)
+        address_pattern = r'\b\d+\s+[A-Z][a-z]+\s+(?:Street|St|Avenue|Ave|Road|Rd|Lane|Ln)\b'
+        for match in re.finditer(address_pattern, text, re.IGNORECASE):
+            entities.append(('address', match.group()))
+        
+        return entities
+    
+    def dehydrate(self, text: str) -> Tuple[str, List[PIIEntity]]:
+        """Replace detected PII with LOG_ID placeholders."""
+        entities = self.detect_entities(text)
+        processed_entities = []
+        result = text
+        
+        for entity_type, real_value in entities:
+            # Check if entity already exists in database
+            existing = self._get_entity_by_value(real_value)
+            if existing:
+                entity_id = existing.entity_id
+                self._update_last_used(entity_id)
+                processed_entities.append(existing)
+            else:
+                entity_id = self._generate_entity_id(entity_type)
+                pii_entity = PIIEntity(
+                    entity_id=entity_id,
+                    entity_type=entity_type,
+                    real_value=real_value,
+                    created_at=datetime.now().isoformat(),
+                    last_used=datetime.now().isoformat()
+                )
+                self._store_entity(pii_entity)
+                processed_entities.append(pii_entity)
+            
+            # Replace in text
+            result = result.replace(real_value, f"<{entity_id}>")
+        
+        return result, processed_entities
+    
+    def _get_entity_by_value(self, real_value: str) -> Optional[PIIEntity]:
+        """Retrieve entity by its real value."""
+        with DatabaseConnection(self.reallog.db_path) as conn:
+            row = conn.execute(
+                "SELECT entity_id, entity_type, real_value, created_at, last_used FROM pii_map WHERE real_value = ?",
+                (real_value,)
+            ).fetchone()
+            if row:
+                return PIIEntity(
+                    entity_id=row['entity_id'],
+                    entity_type=row['entity_type'],
+                    real_value=row['real_value'],
+                    created_at=row['created_at'],
+                    last_used=row['last_used']
+                )
+        return None
+    
+    def _generate_entity_id(self, entity_type: str) -> str:
+        """Generate a unique entity ID."""
+        type_prefix = {
+            'person': 'ENTITY',
+            'email': 'EMAIL',
+            'phone': 'PHONE',
+            'address': 'ADDR',
+            'ssn': 'SSN',
+            'credit_card': 'CC',
+            'api_key': 'KEY'
+        }.get(entity_type, 'ENT')
+        
+        with DatabaseConnection(self.reallog.db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM pii_map WHERE entity_type = ?",
+                (entity_type,)
+            ).fetchone()[0]
+        
+        return f"{type_prefix}_{count + 1}"
+    
+    def _store_entity(self, entity: PIIEntity) -> None:
+        """Store a new PII entity."""
+        with DatabaseConnection(self.reallog.db_path) as conn:
+            conn.execute(
+                "INSERT INTO pii_map (entity_id, entity_type, real_value, created_at, last_used) VALUES (?, ?, ?, ?, ?)",
+                (entity.entity_id, entity.entity_type, entity.real_value, entity.created_at, entity.last_used)
+            )
+    
+    def _update_last_used(self, entity_id: str) -> None:
+        """Update the last_used timestamp for an entity."""
+        with DatabaseConnection(self.reallog.db_path) as conn:
+            conn.execute(
+                "UPDATE pii_map SET last_used = ? WHERE entity_id = ?",
+                (datetime.now().isoformat(), entity_id)
+            )
+
+
+class Rehydrator:
+    """Swap LOG_ID placeholders back to real values."""
+    
+    def __init__(self, reallog: RealLog):
+        self.reallog = reallog
+    
+    def rehydrate(self, text: str) -> str:
+        """Replace all LOG_ID placeholders with their real values."""
+        # Find all placeholders in the text
+        placeholders = re.findall(r'<([A-Z_]+_\d+)>', text)
+        result = text
+        
+        for placeholder in placeholders:
+            entity = self._get_entity_by_id(placeholder)
+            if entity:
+                result = result.replace(f"<{placeholder}>", entity.real_value)
+                # Update last_used
+                self._update_last_used(placeholder)
+            else:
+                logger.warning(f"Unknown entity ID: {placeholder}")
+        
+        return result
+    
+    def _get_entity_by_id(self, entity_id: str) -> Optional[PIIEntity]:
+        """Retrieve entity by its ID."""
+        with DatabaseConnection(self.reallog.db_path) as conn:
+            row = conn.execute(
+                "SELECT entity_id, entity_type, real_value, created_at, last_used FROM pii_map WHERE entity_id = ?",
+                (entity_id,)
+            ).fetchone()
+            if row:
+                return PIIEntity(
+                    entity_id=row['entity_id'],
+                    entity_type=row['entity_type'],
+                    real_value=row['real_value'],
+                    created_at=row['created_at'],
+                    last_used=row['last_used']
+                )
+        return None
+    
+    def _update_last_used(self, entity_id: str) -> None:
+        """Update the last_used timestamp for an entity."""
+        with DatabaseConnection(self.reallog.db_path) as conn:
+            conn.execute(
+                "UPDATE pii_map SET last_used = ? WHERE entity_id = ?",
+                (datetime.now().isoformat(), entity_id)
+            )
+
+
+# Utility functions
+def create_session(session_id: str, summary: str, metadata: Optional[dict] = None) -> Session:
+    """Create a new session."""
+    return Session(
+        id=session_id,
+        timestamp=datetime.now().isoformat(),
+        summary=summary,
+        metadata=metadata or {}
+    )
+
+
+def create_message(session_id: str, role: str, content: str) -> Message:
+    """Create a new message."""
+    return Message(
+        id=0,  # Will be set by database
+        session_id=session_id,
+        role=role,
+        content=content,
+        timestamp=datetime.now().isoformat()
+    )

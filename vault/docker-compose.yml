@@ -5,8 +5,9 @@ services:
       dockerfile: vault/Dockerfile
     volumes:
       - ~/.log:/root/.log:Z
+      - ./vault:/app/vault:ro
     ports:
-      - "8420:8420"  # Local MCP endpoint
+      - "8420:8420"  # MCP server port
     restart: unless-stopped
     deploy:
       resources:
@@ -18,3 +19,36 @@ services:
     environment:
       - LOG_DB_PATH=/root/.log/vault/reallog.db
       - LOG_ARCHIVE_ROOT=/root/.log/vault/archives
+      - PYTHONPATH=/app
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(2); result = s.connect_ex(('localhost',8420)); s.close(); exit(result)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - log-network
+
+  # Optional: Add a database backup service
+  backup:
+    image: alpine:latest
+    volumes:
+      - ~/.log:/data:Z
+      - ./backup:/backup:Z
+    command: >
+      sh -c "
+      apk add --no-cache sqlite3 &&
+      while true; do
+        if [ -f /data/vault/reallog.db ]; then
+          sqlite3 /data/vault/reallog.db '.backup /backup/reallog-$$(date +%Y%m%d-%H%M%S).db'
+        fi
+        sleep 86400
+      done"
+    restart: unless-stopped
+    networks:
+      - log-network
+
+networks:
+  log-network:
+    driver: bridge

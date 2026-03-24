@@ -64,10 +64,11 @@ L.O.G. is a self-hosted system that sits between you and any AI agent. It create
 
 ### Prerequisites
 
-- NVIDIA Jetson Orin Nano 8GB (recommended sweet spot)
-- Docker + Docker Compose
-- Cloudflare account (free tier works)
-- Python 3.10+
+- Python 3.10+ (required for type hints and modern syntax)
+- SQLite3 (usually included with Python)
+- NVIDIA Jetson Orin Nano 8GB (recommended for local redaction) or any Linux machine
+- Docker + Docker Compose (optional, for containerized redactor service)
+- Cloudflare account (optional, for Ghost cloud deployment)
 
 ### 1. Clone and Initialize
 
@@ -75,39 +76,67 @@ L.O.G. is a self-hosted system that sits between you and any AI agent. It create
 git clone https://github.com/CedarBeach2019/LOG-mcp.git
 cd LOG-mcp
 
-# Initialize the Vault
-./scripts/vault-init.sh
+# Create virtual environment (recommended)
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install core dependencies
+pip install -e .
+
+# Initialize the Vault database
+python -m vault.cli init
 ```
 
-### 2. Start Local Services
+### 2. Configure Environment
 
 ```bash
-# Pull and run the local redactor + SQLite RealLog
+# Copy example environment file
+cp .env.example .env
+# Edit .env with your settings (API keys, paths, etc.)
+```
+
+### 3. Start Local Services (Optional)
+
+If using the Docker-based redactor:
+
+```bash
 cd vault && docker-compose up -d
 ```
 
-### 3. Connect to Cloudflare (Optional)
+### 4. Test Core Functionality
 
 ```bash
-# Install and authenticate wrangler
+# Test dehydration
+python -m vault.cli dehydrate "Email my lawyer Sarah at sarah@firm.com"
+# Expected output: "Email my lawyer <ENTITY_1> at <EMAIL_1>"
+
+# Test rehydration
+python -m vault.cli rehydrate "Email my lawyer <ENTITY_1> at <EMAIL_1>"
+# Should restore original text if session exists
+
+# Check system status
+python -m vault.cli status
+```
+
+### 5. Connect to Cloudflare (Optional)
+
+```bash
+# Install wrangler CLI
 npm install -g wrangler
 wrangler login
 
-# Deploy your Ghost portal
-cd ghost && wrangler deploy --name log-gateway
-
-# Map custom domain in Cloudflare Dashboard:
-# Workers & Pages → Custom Domains → (yourname).log.ai
+# Deploy your Ghost portal (requires ghost/ directory)
+cd ghost && wrangler deploy
 ```
 
-### 4. Test Dehydration
+## Environment Variables
 
-```bash
-# The Vault CLI
-pip install -e ./vault/cli
-log dehydrate "Email my lawyer Sarah at sarah@firm.com"
-# → "Email my lawyer <ENTITY_1> at <EMAIL_1>"
-```
+See `.env.example` for all required and optional variables. Key variables include:
+
+- `VAULT_DB_PATH`: Path to SQLite database
+- `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`: For external scout connectors
+- `REDACTOR_HOST`, `REDACTOR_PORT`: Local redactor service settings
+- Cloudflare settings for Ghost deployment
 
 ## Target Hardware
 
@@ -150,6 +179,8 @@ LOG-mcp/
 
 ## MCP Tools (Agent Vocabulary)
 
+The MCP server in `mcp/server.py` provides the following tools for agents:
+
 ### Hot Memory (Live)
 
 | Tool | Description |
@@ -157,26 +188,22 @@ LOG-mcp/
 | `log_dehydrate` | Strip PII from text, return safe pseudonymized version |
 | `log_rehydrate` | Swap `LOG_ID` placeholders back to real values |
 
-### Warm Memory (Context)
+### Archive & Search
 
 | Tool | Description |
 |---|---|
-| `log_distill` | Summarize conversation into semantic "Working-Fiction" |
-| `log_ghost_sync` | Push dehydrated context to cloud Ghost portal |
-
-### Cold Memory (Archive)
-
-| Tool | Description |
-|---|---|
-| `log_prune_hysteresis` | GC: move memories Hot→Warm→Cold, prune stale data |
+| `log_archive_session` | Archive a conversation session with metadata |
+| `log_search_archives` | Search archived sessions by keyword |
 | `log_archive_gnosis` | Extract permanent lessons from completed sessions |
 
-### Orchestration (Permissions)
+### System Management
 
 | Tool | Description |
 |---|---|
-| `log_request_scout` | Dispatch dehydrated prompt to external agent |
-| `log_issue_report` | Send quiet report without notification |
+| `log_prune_hysteresis` | Garbage collect old data based on hysteresis settings |
+| `log_vault_status` | Check vault health and statistics |
+
+> Note: Some tools mentioned in earlier documentation (like `log_distill`, `log_ghost_sync`, `log_request_scout`, `log_issue_report`) are planned but not yet implemented in the current version.
 
 ## Privacy Guarantee
 

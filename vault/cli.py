@@ -41,27 +41,31 @@ def cmd_init(args):
 
 def cmd_dehydrate(args):
     """Dehydrate text — strip PII, replace with LOG_IDs."""
-    log = RealLog(args.db_path)
-    text = " ".join(args.text) if args.text else sys.stdin.read().strip()
+    try:
+        log = RealLog(args.db_path)
+        text = " ".join(args.text) if args.text else sys.stdin.read().strip()
 
-    if not text:
-        print("❌ No text provided", file=sys.stderr)
+        if not text:
+            print("❌ No text provided", file=sys.stderr)
+            sys.exit(1)
+
+        dehydrated, entities = log.dehydrate(text)
+
+        if args.json:
+            output = {
+                "dehydrated": dehydrated,
+                "entities": [{"log_id": e.entity_id, "type": e.entity_type, "real_value_length": len(e.real_value)} for e in entities]
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            print(dehydrated)
+            if entities:
+                print(f"\n🔍 Detected {len(entities)} entities:")
+                for e in entities:
+                    print(f"   <{e.entity_id}> = [{e.entity_type}] (length: {len(e.real_value)})")
+    except Exception as e:
+        print(f"❌ Error during dehydration: {e}", file=sys.stderr)
         sys.exit(1)
-
-    dehydrated, entities = log.dehydrate(text)
-
-    if args.json:
-        output = {
-            "dehydrated": dehydrated,
-            "entities": [{"log_id": e.log_id, "type": e.entity_type} for e in entities]
-        }
-        print(json.dumps(output, indent=2))
-    else:
-        print(dehydrated)
-        if entities:
-            print(f"\n🔍 Detected {len(entities)} entities:")
-            for e in entities:
-                print(f"   <{e.log_id}> = [{e.entity_type}] ***")
 
 
 def cmd_rehydrate(args):
@@ -194,9 +198,10 @@ def cmd_entities(args):
             return
         print(f"📋 {len(entities)} registered entities:\n")
         for e in entities:
-            status = "✅" if e.approved else "⏳"
-            print(f"  {status} <{e.log_id}> [{e.entity_type}]")
-            print(f"     Context: {e.context or 'N/A'}")
+            # Note: PIIEntity doesn't have 'approved' or 'context' fields in the current implementation
+            # We'll show basic info for now
+            print(f"  <{e.entity_id}> [{e.entity_type}]")
+            print(f"     Value: {'*' * min(10, len(e.real_value))}... (length: {len(e.real_value)})")
 
     elif args.action == "add":
         if len(args.values) < 2:
