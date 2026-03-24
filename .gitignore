@@ -47,3 +47,4 @@ vault/archives/
 *.db
 *.db-wal
 *.db-shm
+.wrangler/
