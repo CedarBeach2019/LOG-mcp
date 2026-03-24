@@ -1,210 +1,196 @@
-# 🪵 L.O.G. — Latent Orchestration Gateway
+<!-- Badges -->
+![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
+![MIT License](https://img.shields.io/badge/license-MIT-green)
+![Tests](https://img.shields.io/badge/tests-52%20passing-brightgreen)
+[![Deployed](https://img.shields.io/badge/live-Cloudflare%20Workers-orange)](https://log-mcp-vault.magnus-digennaro.workers.dev/)
 
-> **Your data never leaves your machine. AI agents never see your real identity.**
+# 🔒 LOG-mcp — Your PII never touches an AI server.
 
-L.O.G. is a privacy-first middleware layer that sits between you and any AI service. Before your messages reach Claude, GPT, DeepSeek, or any other API, L.O.G. strips out all personal information — names, emails, phone numbers, SSNs, credit cards, addresses — and replaces them with anonymous placeholders. The AI works with pseudonymized data. L.O.G. swaps the real values back before you see the response.
-
-```
-You write:  "Book a flight for Sarah Chen, email sarah@gmail.com, card 4111-2222-3333-4444"
-L.O.G. sends: "Book a flight for <ENTITY_1>, email <EMAIL_1>, card <CC_1>"
-AI sees:    Only the anonymized version — zero PII
-You see:    "Flight booked for Sarah Chen, confirmation sent to sarah@gmail.com"
-```
-
-**Zero trust required in your AI provider. Your PII never touches their servers.**
-
-## Why
-
-Every time you use an AI assistant for something real — booking flights, managing legal documents, handling finances, medical questions — your personal data goes to a cloud server you don't control. You're trusting a Terms of Service with your SSN.
-
-L.O.G. inserts a mandatory dehydration step. Nothing leaves your hardware until it's been scrubbed clean.
-
-## How It Works
+Privacy middleware that strips every trace of personal data from your messages *before* they reach any AI API. No trust required.
 
 ```
-┌──────────────┐     ┌─────────────────┐     ┌──────────────┐
-│   YOUR DATA  │────→│  L.O.G. VAULT   │────→│  AI SERVICE  │
-│              │     │                 │     │              │
-│  Sarah Chen  │     │  <ENTITY_1>     │     │  Only sees   │
-│  sarah@...   │     │  <EMAIL_1>      │     │  anonymous   │
-│  4111-2222…  │     │  <CC_1>         │     │  data        │
-│              │     │                 │     │              │
-│              │←────│  Rehydrate      │←────│  Response    │
-│  Sarah Chen  │     │                 │     │  with IDs    │
-└──────────────┘     └─────────────────┘     └──────────────┘
-                          ↓
-                   ┌──────────────┐
-                   │ LOCAL VAULT  │
-                   │ SQLite + AES │
-                   │ Your machine │
-                   │ Only         │
-                   └──────────────┘
+$ log dehydrate "Patient John Smith (DOB 1985-03-12) called from 555-123-4567"
+
+  Dehydrated: "Patient ENTITY_1 (DOB [DOB]) called from PHONE_1"
+  Rehydrate key: session_abc123
+
+  → Send "Patient ENTITY_1 (DOB [DOB]) called from PHONE_1" to any AI.
+  → The AI never sees John Smith, his birthday, or his phone number.
 ```
 
-### Three Deployment Modes
+👉 **[Try it live](https://log-mcp-vault.magnus-digennaro.workers.dev/)** — hit the deployed Cloudflare Worker right now.
 
-| Mode | Where | Cost | Best For |
-|------|-------|------|----------|
-| **Cloud** | Cloudflare Workers | **Free** | Quick start, no local hardware |
-| **Hybrid** | Cloudflare + Local (Jetson/PC) | **Free** | Smart redaction with local LLM |
-| **Self-Hosted** | Docker container | **Free** | Full control, air-gapped, teams |
+---
 
-## Detects
+## Why this matters
 
-- ✅ Email addresses (all formats including +aliases)
-- ✅ Phone numbers (US, international)
-- ✅ Social Security Numbers
-- ✅ Credit/debit card numbers
-- ✅ API keys and tokens (sk-, key_, etc.)
-- ✅ Street addresses
-- ✅ Passport numbers
-- ✅ Personal names (context-aware, minimal false positives)
-- ✅ Non-ASCII PII (Chinese phones, Russian names)
+| Scenario | Risk without LOG-mcp |
+|---|---|
+| **Healthcare** — Sending patient notes to an LLM for summarization | HIPAA violation. Real names, SSNs, and diagnoses leak to OpenAI/Anthropic servers. |
+| **Legal** — Running attorney-client memos through AI for research | Attorney-client privilege destroyed. Case details stored in third-party training data. |
+| **Finance** — Automating fraud analysis on transaction logs | PCI-DSS breach. Credit card numbers and account holders exposed to AI providers. |
+| **Multi-agent** — Agents passing user context to sub-agents | Each hop is a potential PII leak. Every endpoint is an attack surface. |
 
-## Install
+LOG-mcp catches all of it *at the gateway*, before data leaves your infrastructure.
+
+---
+
+## Architecture
+
+```
+ ┌──────────┐      ┌──────────────┐      ┌───────────┐
+ │  Your     │      │  LOG-mcp     │      │  AI API   │
+ │  App /    │─────▶│  Gateway     │─────▶│           │
+ │  Agent    │      │              │      │  Claude   │
+ └──────────┘      │  dehydrate() │      │  GPT      │
+                    │  → strip PII │      │  Gemini   │
+ ┌──────────┐      │  → store map │      │  Llama    │
+ │  Local    │◀─────│  rehydrate() │◀─────│           │
+ │  Vault    │      │  → restore   │      └───────────┘
+ │  (SQLite) │      │              │
+ └──────────┘      └──────────────┘
+```
+
+Your data flows: **App → Gateway → AI** (anonymized). **AI → Gateway → App** (rehydrated). The AI only ever sees tokens like `ENTITY_1` and `PHONE_3`.
+
+---
+
+## Quick Install
 
 ```bash
-# Works on any machine with Python 3.10+
 git clone https://github.com/CedarBeach2019/LOG-mcp.git
 cd LOG-mcp
 pip install -e .
-log init
-
-# Try it
-echo "Email sarah@gmail.com, call 555-123-4567, SSN 000-00-0000" | log dehydrate --json
-# → {"dehydrated": "<EMAIL_1>, call <PHONE_1>, SSN <SSN_1>", "entities": 3}
 ```
 
-### CLI
+That's it. You're ready.
 
 ```bash
-log init                  # Initialize vault database
-log dehydrate             # Strip PII from stdin or arguments
-log rehydrate             # Restore real values from placeholders
-log status                # Show vault statistics
-log entities list         # List all stored PII mappings
-log gnosis "Title" "Body" # Save a permanent lesson learned
-log archive               # Archive a session
-log search "query"        # Search archives
-log prune                 # Run garbage collector
+$ log dehydrate "Call Jane Doe at jane@example.com or 212-555-0147"
+Dehydrated: "Call ENTITY_1 at EMAIL_1 or PHONE_1"
+Session: sess_7f3a2c
 ```
 
-### MCP Server
+---
 
-Works with any MCP-compatible AI agent (Claude Desktop, OpenAI Codex, etc.):
+## Deployment Modes
+
+| Mode | Best for | Cost | Latency |
+|---|---|---|---|
+| **[Local](#local)** | Development, privacy-critical workloads | Free | Lowest |
+| **[Cloudflare Workers](#cloudflare-workers)** | Production, serverless, global edge | Free tier | ~50ms |
+| **[Docker](#docker)** | Self-hosted, air-gapped, on-prem | Infrastructure only | Network-dependent |
+
+### Local
+
+```bash
+pip install -e ".[full]"
+log init              # create vault at ~/.log/vault/
+log dehydrate "Your text here"
+```
+
+### Cloudflare Workers
+
+Free tier includes 100k requests/day, D1 database, and KV cache.
+
+```bash
+cd cloudflare
+npm install
+npx wrangler login
+npx wrangler deploy
+```
+
+Endpoints: `/dehydrate`, `/rehydrate`, `/stats`, `/health`
+
+Live demo: [https://log-mcp-vault.magnus-digennaro.workers.dev/](https://log-mcp-vault.magnus-digennaro.workers.dev/)
+
+### Docker
+
+```bash
+docker build -t log-mcp .
+docker run -p 8000:8000 -v log-vault:/data log-mcp
+```
+
+---
+
+## PII Detection
+
+LOG-mcp identifies and replaces these entity types:
+
+| Entity | Example Input | Anonymized Output |
+|---|---|---|
+| Emails | `user@example.com` | `EMAIL_1` |
+| Phone numbers | `+1 (555) 123-4567` | `PHONE_1` |
+| SSNs | `123-45-6789` | `SSN_1` |
+| Credit cards | `4532-1234-5678-9010` | `CC_1` |
+| Names (English) | `Jane Marie Smith` | `ENTITY_1` |
+| Addresses | `123 Main St, Springfield IL` | `ADDR_1` |
+| Dates of birth | `1985-03-12` | `[DOB]` |
+| Passport numbers | `US12345678` | `PASSPORT_1` |
+| API keys | `sk-proj-abc123...` | `KEY_1` |
+| Non-ASCII PII | Cyrillic/CJK names & data | Redacted |
+
+---
+
+## CLI Reference
+
+| Command | Description |
+|---|---|
+| `log dehydrate "<text>"` | Strip PII, return anonymized text + session key |
+| `log rehydrate <session-id>` | Restore original text from vault |
+| `log init` | Initialize local vault (`~/.log/vault/`) |
+| `log stats` | Show vault statistics (sessions, entities, storage) |
+| `log scout <provider> "<text>"` | Dehydrate → send to AI → rehydrate response |
+| `log archive <session-id>` | Archive a session to long-term storage |
+
+---
+
+## MCP Integration
+
+Use LOG-mcp as an [MCP](https://modelcontextprotocol.io/) server:
 
 ```json
 {
   "mcpServers": {
     "log-vault": {
       "command": "python",
-      "args": ["mcp/server.py"],
+      "args": ["-m", "mcp.server"],
       "cwd": "/path/to/LOG-mcp"
     }
   }
 }
 ```
 
-**MCP tools:** `log_dehydrate`, `log_rehydrate`, `log_vault_status`, `log_archive_session`, `log_archive_gnosis`, `log_search_archives`, `log_prune_hysteresis`
+Tools exposed: `dehydrate`, `rehydrate`, `stats`, `list_sessions`.
 
-### Docker
+---
 
-```bash
-cd LOG-mcp
-docker compose -f docker/docker-compose.yml up -d
-# Vault running at http://localhost:8000
-# Health check at http://localhost:8000/health
-```
-
-### Cloudflare Workers (Free)
+## Testing
 
 ```bash
-cd LOG-mCP/cloudflare/worker
-npm install
-# Set your API keys
-echo "AI_API_KEY=your-key" > .dev.vars
-echo "PROVIDER_ENDPOINT=https://api.deepseek.com/v1/chat/completions" >> .dev.vars
-
-# Deploy
-wrangler deploy
-# Your privacy proxy is live at your-worker.workers.dev
-```
-
-**Or via GitHub Actions:** Fork → add secrets → push to main → auto-deploys.
-
-## Architecture
-
-```
-LOG-mcp/
-├── vault/                  # Core engine
-│   ├── core.py            # RealLog DB, Dehydrator, Rehydrator
-│   ├── archiver.py        # Session archiving + gnosis extraction
-│   ├── cli.py             # CLI interface
-│   └── reallog_db.py      # Database schema + migrations
-├── mcp/
-│   └── server.py          # MCP server (JSON-RPC over stdio)
-├── scouts/                 # Agent connectors
-│   ├── base.py            # Base scout interface
-│   ├── claude.py          # Claude connector
-│   └── deepseek_scout.py  # DeepSeek connector
-├── cloudflare/
-│   ├── worker/            # Cloudflare Worker (privacy proxy)
-│   └── pages/             # Landing page + interactive demo
-├── docker/
-│   ├── Dockerfile         # Multi-stage container
-│   └── docker-compose.yml # Full stack (vault + optional Ollama)
-├── tests/
-│   ├── test_core.py       # 7 unit tests
-│   ├── test_extended.py   # 29 comprehensive tests
-│   └── demo_e2e.py        # 7 end-to-end scenario demos
-├── ROADMAP.md             # 8-phase development plan
-└── pyproject.toml
-```
-
-## Roadmap Highlights
-
-| Phase | What | Status |
-|-------|------|--------|
-| 0 | Regex PII, SQLite, MCP, CLI | ✅ Done |
-| 1 | Local LLM redaction (Jetson GPU) | Next |
-| 2 | Intelligent provider routing | Planned |
-| 3 | Vector search + memory management | Planned |
-| 4 | API rate limit optimization | Planned |
-| 5 | Self-improving daemon (RL) | Planned |
-| 6 | Multi-agent ecosystem (AutoClaw-inspired) | Planned |
-| 7 | Autonomous intelligence | Planned |
-
-See [ROADMAP.md](ROADMAP.md) for the full plan with technical details and timelines.
-
-## Tests
-
-```bash
-pip install -e ".[dev]"
+# Unit tests (52 tests)
 pytest tests/ -v
-# 37 passed
+
+# E2e scenario suite (46 checks: HIPAA, legal, financial, multi-agent)
+pytest tests/demo_e2e.py -v
+
+# With coverage
+pytest --cov=vault --cov=mcp --cov=scouts
 ```
 
-Plus 46 end-to-end checks covering realistic scenarios: medical records (HIPAA), attorney-client privilege, financial data, multi-agent collaboration, multi-turn conversations.
+---
 
-## Under the Hood
+## Project Links
 
-- **Thread-safe** SQLite with proper locking for concurrent access
-- **Persistent connection pooling** — no connection overhead per operation
-- **44 dehydrations/sec** on Jetson Orin Nano (regex path)
-- **Consistent entity IDs** across sessions — same email always gets the same placeholder
-- **Atomic check-and-insert** prevents race conditions in multi-agent setups
+| | |
+|---|---|
+| 🚀 **[Quickstart Guide](QUICKSTART.md)** | Get running in 5 minutes |
+| 🗺️ **[Roadmap](ROADMAP.md)** | What's coming next |
+| 🤝 **[Contributing](CONTRIBUTING.md)** | Join the project |
+| 📄 **[License](LICENSE)** | MIT |
 
-## Privacy Guarantee
-
-- Your data never leaves your machine unredacted
-- No telemetry, no phone home, no analytics
-- SQLite database is local — no cloud sync of real PII
-- MIT licensed, fully auditable
-
-## Contributing
-
-Fork it. Run it. Break it. Fix it. Open a PR.
+---
 
 ## License
 
-MIT
+MIT — use it however you want. Star the repo if it saves you from a compliance headache.
