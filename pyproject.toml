@@ -1,0 +1,13 @@
+[project]
+name = "log-vault"
+version = "0.1.0"
+description = "L.O.G. — Latent Orchestration Gateway Vault (Local Privacy Engine)"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+log = "vault.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

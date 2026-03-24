@@ -1,0 +1,20 @@
+services:
+  vault:
+    build:
+      context: ..
+      dockerfile: vault/Dockerfile
+    volumes:
+      - ~/.log:/root/.log:Z
+    ports:
+      - "8420:8420"  # Local MCP endpoint
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - LOG_DB_PATH=/root/.log/vault/reallog.db
+      - LOG_ARCHIVE_ROOT=/root/.log/vault/archives
