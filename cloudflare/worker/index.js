@@ -156,7 +156,7 @@ function rehydrate(text, mappings) {
 // ─── Proxy Handler ──────────────────────────────────────────────────────
 
 async function handleProxy(request, env, corsHeaders) {
-  if (!env.DB) {
+  if (!env.LOG_VAULT) {
     const e = error('NO_DATABASE', 'D1 database binding (DB) not configured', 500);
     return json(e.body, corsHeaders, e.status);
   }
@@ -174,7 +174,7 @@ async function handleProxy(request, env, corsHeaders) {
     return json(e.body, corsHeaders, e.status);
   }
 
-  await ensureD1Schema(env.DB);
+  await ensureD1Schema(env.LOG_VAULT);
 
   const sessionId = crypto.randomUUID();
   const endpoint = env.PROVIDER_ENDPOINT || 'https://api.openai.com/v1/chat/completions';
@@ -182,7 +182,7 @@ async function handleProxy(request, env, corsHeaders) {
   const model = body.model || 'unknown';
 
   // Create session in D1
-  await env.DB.prepare('INSERT INTO sessions (id, provider, model, created_at, message_count) VALUES (?,?,?,?,?)')
+  await env.LOG_VAULT.prepare('INSERT INTO sessions (id, provider, model, created_at, message_count) VALUES (?,?,?,?,?)')
     .bind(sessionId, provider, model, new Date().toISOString(), body.messages.length).run();
 
   // Dehydrate all messages
@@ -190,7 +190,7 @@ async function handleProxy(request, env, corsHeaders) {
   let allD1Binds = [];
   for (const msg of body.messages) {
     if (typeof msg.content === 'string') {
-      const { dehydrated, mappings, d1Binds } = dehydrate(msg.content, env.DB, sessionId);
+      const { dehydrated, mappings, d1Binds } = dehydrate(msg.content, env.LOG_VAULT, sessionId);
       msg.content = dehydrated;
       Object.assign(allMappings, mappings);
       allD1Binds.push(...d1Binds);
@@ -198,7 +198,7 @@ async function handleProxy(request, env, corsHeaders) {
   }
 
   // Store in D1 (primary) and KV (fast lookup for rehydration)
-  await storeMappings(env.DB, allD1Binds);
+  await storeMappings(env.LOG_VAULT, allD1Binds);
   if (env.PII_MAP) {
     await env.PII_MAP.put(sessionId, JSON.stringify(allMappings), { expirationTtl: 3600 });
   }
@@ -226,7 +226,7 @@ async function handleProxy(request, env, corsHeaders) {
 
     if (!resp.ok) {
       const errText = await resp.text();
-      await env.DB.prepare('INSERT INTO request_log (timestamp, session_id, provider, status, error) VALUES (?,?,?,?,?)')
+      await env.LOG_VAULT.prepare('INSERT INTO request_log (timestamp, session_id, provider, status, error) VALUES (?,?,?,?,?)')
         .bind(new Date().toISOString(), sessionId, provider, respStatus, errText.slice(0, 500)).run();
       const e = error('UPSTREAM_ERROR', `Upstream responded with ${respStatus}`, respStatus);
       return json({ ...e.body, detail: errText.slice(0, 1000) }, corsHeaders, e.status);
@@ -238,7 +238,7 @@ async function handleProxy(request, env, corsHeaders) {
     if (stream) {
       const response = handleStream(resp, allMappings, sessionId, env, corsHeaders);
       // Log async (fire and forget for streaming)
-      env.DB.prepare('INSERT INTO request_log (timestamp, session_id, provider, status) VALUES (?,?,?,?)')
+      env.LOG_VAULT.prepare('INSERT INTO request_log (timestamp, session_id, provider, status) VALUES (?,?,?,?)')
         .bind(new Date().toISOString(), sessionId, provider, respStatus).run();
       return response;
     }
@@ -253,13 +253,13 @@ async function handleProxy(request, env, corsHeaders) {
       data.choices[0].message.content = rehydrate(data.choices[0].message.content, allMappings);
     }
 
-    await env.DB.prepare(
+    await env.LOG_VAULT.prepare(
       'INSERT INTO request_log (timestamp, session_id, provider, status, input_tokens, output_tokens) VALUES (?,?,?,?,?,?)'
     ).bind(new Date().toISOString(), sessionId, provider, respStatus, inputTokensUsed, outputTokensUsed).run();
 
     return json(data, corsHeaders);
   } catch (err) {
-    await env.DB.prepare('INSERT INTO request_log (timestamp, session_id, provider, status, error) VALUES (?,?,?,?,?)')
+    await env.LOG_VAULT.prepare('INSERT INTO request_log (timestamp, session_id, provider, status, error) VALUES (?,?,?,?,?)')
       .bind(new Date().toISOString(), sessionId, provider, 0, err.message.slice(0, 500)).run();
     const e = error('PROVIDER_ERROR', `Provider request failed: ${err.message}`, 502);
     return json(e.body, corsHeaders, e.status);
@@ -331,19 +331,19 @@ async function handleStream(upstream, mappings, sessionId, env, corsHeaders) {
 // ─── Stats Handler ──────────────────────────────────────────────────────
 
 async function handleStats(env, corsHeaders) {
-  if (!env.DB) {
+  if (!env.LOG_VAULT) {
     const e = error('NO_DATABASE', 'D1 database binding not configured', 500);
     return json(e.body, corsHeaders, e.status);
   }
-  await ensureD1Schema(env.DB);
+  await ensureD1Schema(env.LOG_VAULT);
 
   const [entities, sessions, recent] = await Promise.all([
-    env.DB.prepare('SELECT COUNT(*) as cnt FROM pii_entities').first(),
-    env.DB.prepare('SELECT COUNT(*) as cnt FROM sessions').first(),
-    env.DB.prepare('SELECT COUNT(*) as cnt FROM request_log WHERE timestamp > datetime(\'now\', \'-24 hours\')').first(),
+    env.LOG_VAULT.prepare('SELECT COUNT(*) as cnt FROM pii_entities').first(),
+    env.LOG_VAULT.prepare('SELECT COUNT(*) as cnt FROM sessions').first(),
+    env.LOG_VAULT.prepare('SELECT COUNT(*) as cnt FROM request_log WHERE timestamp > datetime(\'now\', \'-24 hours\')').first(),
   ]);
 
-  const byType = await env.DB.prepare('SELECT entity_type, COUNT(*) as cnt FROM pii_entities GROUP BY entity_type').all();
+  const byType = await env.LOG_VAULT.prepare('SELECT entity_type, COUNT(*) as cnt FROM pii_entities GROUP BY entity_type').all();
 
   return json({
     pii_entities: entities?.cnt || 0,
@@ -388,12 +388,12 @@ export default {
 
     // Test dehydrate
     if (url.pathname === '/dehydrate' && request.method === 'GET') {
-      if (!env.DB) { const e = error('NO_DATABASE', 'D1 not configured', 500); return json(e.body, corsHeaders, e.status); }
-      await ensureD1Schema(env.DB);
+      if (!env.LOG_VAULT) { const e = error('NO_DATABASE', 'D1 not configured', 500); return json(e.body, corsHeaders, e.status); }
+      await ensureD1Schema(env.LOG_VAULT);
       const text = url.searchParams.get('text') || '';
       const sessionId = crypto.randomUUID();
-      const { dehydrated, mappings, d1Binds } = dehydrate(text, env.DB, sessionId);
-      await storeMappings(env.DB, d1Binds);
+      const { dehydrated, mappings, d1Binds } = dehydrate(text, env.LOG_VAULT, sessionId);
+      await storeMappings(env.LOG_VAULT, d1Binds);
       return json({ original: text, dehydrated, mappings, id: sessionId }, corsHeaders);
     }
 
