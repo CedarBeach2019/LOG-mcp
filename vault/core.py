@@ -92,6 +92,7 @@ class RealLog:
     def __init__(self, db_path: str | Path = "~/.log/vault/reallog.db"):
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = __import__('threading').Lock()
         self._init_db()
     
     def _init_db(self):
@@ -340,15 +341,15 @@ class Dehydrator:
                 self._update_last_used(entity_id)
                 processed_entities.append(existing)
             else:
-                entity_id = self._generate_entity_id(entity_type)
                 pii_entity = PIIEntity(
-                    entity_id=entity_id,
+                    entity_id="",  # Will be set by _store_entity
                     entity_type=entity_type,
                     real_value=real_value,
                     created_at=datetime.now().isoformat(),
                     last_used=datetime.now().isoformat()
                 )
-                self._store_entity(pii_entity)
+                pii_entity = self._store_entity(pii_entity)
+                entity_id = pii_entity.entity_id
                 processed_entities.append(pii_entity)
             
             # Replace in text
@@ -374,7 +375,7 @@ class Dehydrator:
         return None
     
     def _generate_entity_id(self, entity_type: str) -> str:
-        """Generate a unique entity ID."""
+        """Generate a unique entity ID using MAX+1 for thread safety."""
         type_prefix = {
             'person': 'ENTITY',
             'email': 'EMAIL',
@@ -386,20 +387,55 @@ class Dehydrator:
         }.get(entity_type, 'ENT')
         
         with DatabaseConnection(self.reallog.db_path) as conn:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM pii_map WHERE entity_type = ?",
-                (entity_type,)
+            row = conn.execute(
+                "SELECT MAX(CAST(SUBSTR(entity_id, ?) AS INTEGER)) FROM pii_map WHERE entity_type = ?",
+                (len(type_prefix) + 2, entity_type,)  # +2 for underscore position
             ).fetchone()[0]
+            count = row if row is not None else 0
         
         return f"{type_prefix}_{count + 1}"
     
-    def _store_entity(self, entity: PIIEntity) -> None:
-        """Store a new PII entity."""
-        with DatabaseConnection(self.reallog.db_path) as conn:
-            conn.execute(
-                "INSERT INTO pii_map (entity_id, entity_type, real_value, created_at, last_used) VALUES (?, ?, ?, ?, ?)",
-                (entity.entity_id, entity.entity_type, entity.real_value, entity.created_at, entity.last_used)
-            )
+    def _store_entity(self, entity: PIIEntity) -> PIIEntity:
+        """Thread-safe check-and-insert for PII entities."""
+        with self.reallog._lock:
+            with DatabaseConnection(self.reallog.db_path) as conn:
+                # Check if already exists
+                row = conn.execute(
+                    "SELECT entity_id, entity_type, real_value, created_at, last_used FROM pii_map WHERE real_value = ?",
+                    (entity.real_value,)
+                ).fetchone()
+                if row:
+                    existing = PIIEntity(
+                        entity_id=row['entity_id'],
+                        entity_type=row['entity_type'],
+                        real_value=row['real_value'],
+                        created_at=row['created_at'],
+                        last_used=row['last_used']
+                    )
+                    conn.execute(
+                        "UPDATE pii_map SET last_used = ? WHERE entity_id = ?",
+                        (datetime.now().isoformat(), existing.entity_id)
+                    )
+                    return existing
+                
+                # Generate ID
+                type_prefix = {
+                    'person': 'ENTITY', 'email': 'EMAIL', 'phone': 'PHONE',
+                    'address': 'ADDR', 'ssn': 'SSN', 'credit_card': 'CC', 'api_key': 'KEY'
+                }.get(entity.entity_type, 'ENT')
+                
+                row = conn.execute(
+                    "SELECT MAX(CAST(SUBSTR(entity_id, ?) AS INTEGER)) FROM pii_map WHERE entity_type = ?",
+                    (len(type_prefix) + 2, entity.entity_type,)
+                ).fetchone()[0]
+                count = row if row is not None else 0
+                entity.entity_id = f"{type_prefix}_{count + 1}"
+                
+                conn.execute(
+                    "INSERT INTO pii_map (entity_id, entity_type, real_value, created_at, last_used) VALUES (?, ?, ?, ?, ?)",
+                    (entity.entity_id, entity.entity_type, entity.real_value, entity.created_at, entity.last_used)
+                )
+                return entity
     
     def _update_last_used(self, entity_id: str) -> None:
         """Update the last_used timestamp for an entity."""
