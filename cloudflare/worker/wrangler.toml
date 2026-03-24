@@ -1,0 +1,22 @@
+name = "log-mcp-vault"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+# KV namespace for PII mappings — create with:
+#   wrangler kv namespace create PII_MAP
+[[kv_namespaces]]
+binding = "PII_MAP"
+id = "YOUR_KV_NAMESPACE_ID"
+
+# D1 database for audit logs — create with:
+#   wrangler d1 create log-vault
+[[d1_databases]]
+binding = "log_vault"
+database_name = "log-vault"
+database_id = "YOUR_D1_DATABASE_ID"
+
+[vars]
+PROVIDER_ENDPOINT = "https://api.openai.com/v1/chat/completions"
+
+# Secrets (set via `wrangler secret put`):
+#   API_KEY — your AI provider API key

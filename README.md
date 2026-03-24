@@ -1,229 +1,209 @@
 # 🪵 L.O.G. — Latent Orchestration Gateway
 
-> **Your privacy-first memory layer for the agentic era.**
+> **Your data never leaves your machine. AI agents never see your real identity.**
 
-L.O.G. is a self-hosted system that sits between you and any AI agent. It creates a secure "hysteresis" — a historical lag — between your private data and the agents you use. Your real data never leaves your hardware. Agents only ever see a "Working-Fiction" — pseudonymized, distilled, and safe.
-
-## The Architecture
+L.O.G. is a privacy-first middleware layer that sits between you and any AI service. Before your messages reach Claude, GPT, DeepSeek, or any other API, L.O.G. strips out all personal information — names, emails, phone numbers, SSNs, credit cards, addresses — and replaces them with anonymous placeholders. The AI works with pseudonymized data. L.O.G. swaps the real values back before you see the response.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    THE VAULT (Local)                     │
-│         NVIDIA Jetson — Your sovereign territory         │
-│                                                          │
-│  ┌──────────┐  ┌──────────┐  ┌───────────────────────┐  │
-│  │ RealLog  │  │ Redactor │  │ Hysteresis Pruner     │  │
-│  │ (SQLite) │←→│ (Local   │←→│ (Garbage Collector    │  │
-│  │ PII map  │  │  LLM)    │  │  Hot→Warm→Cold)       │  │
-│  └──────────┘  └──────────┘  └───────────────────────┘  │
-│         ↕              ↕                                │
-│  ┌──────────┐  ┌──────────┐                            │
-│  │ Archive  │  │ Summary  │                            │
-│  │ (Full    │  │ Index    │                            │
-│  │  Text)   │  │          │                            │
-│  └──────────┘  └──────────┘                            │
-└──────────────────────┬──────────────────────────────────┘
-                       │ Cloudflare Tunnel (zero exposed ports)
-                       ↓
-┌─────────────────────────────────────────────────────────┐
-│                  THE GHOST (Cloud)                       │
-│       (username).log.ai — Your public-facing proxy      │
-│                                                          │
-│  ┌──────────┐  ┌──────────┐                             │
-│  │ Working  │  │ Approval │                             │
-│  │ Fiction  │  │ Gate     │                             │
-│  │ (Dehyd.) │  │ (Risk    │                             │
-│  │          │  │  Check)  │                             │
-│  └──────────┘  └──────────┘                             │
-└──────────────────────┬──────────────────────────────────┘
-                       │ Dehydrated prompts only
-                       ↓
-┌─────────────────────────────────────────────────────────┐
-│                   THE SCOUTS (External)                  │
-│    Claude · DeepSeek · Devin · Manus · Any Agent        │
-│                                                          │
-│  Agents see pseudonyms. They never see your real data.   │
-└─────────────────────────────────────────────────────────┘
+You write:  "Book a flight for Sarah Chen, email sarah@gmail.com, card 4111-2222-3333-4444"
+L.O.G. sends: "Book a flight for <ENTITY_1>, email <EMAIL_1>, card <CC_1>"
+AI sees:    Only the anonymized version — zero PII
+You see:    "Flight booked for Sarah Chen, confirmation sent to sarah@gmail.com"
 ```
 
-## Vocabulary
+**Zero trust required in your AI provider. Your PII never touches their servers.**
 
-| Term | Meaning |
-|---|---|
-| **Dehydration** | Strip PII, replace with `LOG_ID` placeholders before anything leaves the Vault |
-| **Rehydration** | Swap `LOG_ID` back to real values when showing results to the human |
-| **Working-Fiction** | The dehydrated version of your data that agents interact with |
-| **Hysteresis Pruning** | Automated GC: Hot (local) → Warm (cloud vectors) → Cold (archived) → Pruned |
-| **Gnosis** | Permanent lessons learned, extracted from completed interactions |
-| **Approval Gate** | High-risk agent actions require human sign-off before execution |
-| **The Vault** | Your local Jetson hardware — the only place real data lives |
-| **The Ghost** | Your Cloudflare Worker — the dehydrated face you show the world |
-| **The Scout** | Any external agent processing your dehydrated data |
+## Why
 
-## Quick Start
+Every time you use an AI assistant for something real — booking flights, managing legal documents, handling finances, medical questions — your personal data goes to a cloud server you don't control. You're trusting a Terms of Service with your SSN.
 
-### Prerequisites
+L.O.G. inserts a mandatory dehydration step. Nothing leaves your hardware until it's been scrubbed clean.
 
-- Python 3.10+ (required for type hints and modern syntax)
-- SQLite3 (usually included with Python)
-- NVIDIA Jetson Orin Nano 8GB (recommended for local redaction) or any Linux machine
-- Docker + Docker Compose (optional, for containerized redactor service)
-- Cloudflare account (optional, for Ghost cloud deployment)
+## How It Works
 
-### 1. Clone and Initialize
+```
+┌──────────────┐     ┌─────────────────┐     ┌──────────────┐
+│   YOUR DATA  │────→│  L.O.G. VAULT   │────→│  AI SERVICE  │
+│              │     │                 │     │              │
+│  Sarah Chen  │     │  <ENTITY_1>     │     │  Only sees   │
+│  sarah@...   │     │  <EMAIL_1>      │     │  anonymous   │
+│  4111-2222…  │     │  <CC_1>         │     │  data        │
+│              │     │                 │     │              │
+│              │←────│  Rehydrate      │←────│  Response    │
+│  Sarah Chen  │     │                 │     │  with IDs    │
+└──────────────┘     └─────────────────┘     └──────────────┘
+                          ↓
+                   ┌──────────────┐
+                   │ LOCAL VAULT  │
+                   │ SQLite + AES │
+                   │ Your machine │
+                   │ Only         │
+                   └──────────────┘
+```
+
+### Three Deployment Modes
+
+| Mode | Where | Cost | Best For |
+|------|-------|------|----------|
+| **Cloud** | Cloudflare Workers | **Free** | Quick start, no local hardware |
+| **Hybrid** | Cloudflare + Local (Jetson/PC) | **Free** | Smart redaction with local LLM |
+| **Self-Hosted** | Docker container | **Free** | Full control, air-gapped, teams |
+
+## Detects
+
+- ✅ Email addresses (all formats including +aliases)
+- ✅ Phone numbers (US, international)
+- ✅ Social Security Numbers
+- ✅ Credit/debit card numbers
+- ✅ API keys and tokens (sk-, key_, etc.)
+- ✅ Street addresses
+- ✅ Passport numbers
+- ✅ Personal names (context-aware, minimal false positives)
+- ✅ Non-ASCII PII (Chinese phones, Russian names)
+
+## Install
 
 ```bash
+# Works on any machine with Python 3.10+
 git clone https://github.com/CedarBeach2019/LOG-mcp.git
 cd LOG-mcp
-
-# Create virtual environment (recommended)
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install core dependencies
 pip install -e .
+log init
 
-# Initialize the Vault database
-python -m vault.cli init
+# Try it
+echo "Email sarah@gmail.com, call 555-123-4567, SSN 000-00-0000" | log dehydrate --json
+# → {"dehydrated": "<EMAIL_1>, call <PHONE_1>, SSN <SSN_1>", "entities": 3}
 ```
 
-### 2. Configure Environment
+### CLI
 
 ```bash
-# Copy example environment file
-cp .env.example .env
-# Edit .env with your settings (API keys, paths, etc.)
+log init                  # Initialize vault database
+log dehydrate             # Strip PII from stdin or arguments
+log rehydrate             # Restore real values from placeholders
+log status                # Show vault statistics
+log entities list         # List all stored PII mappings
+log gnosis "Title" "Body" # Save a permanent lesson learned
+log archive               # Archive a session
+log search "query"        # Search archives
+log prune                 # Run garbage collector
 ```
 
-### 3. Start Local Services (Optional)
+### MCP Server
 
-If using the Docker-based redactor:
+Works with any MCP-compatible AI agent (Claude Desktop, OpenAI Codex, etc.):
+
+```json
+{
+  "mcpServers": {
+    "log-vault": {
+      "command": "python",
+      "args": ["mcp/server.py"],
+      "cwd": "/path/to/LOG-mcp"
+    }
+  }
+}
+```
+
+**MCP tools:** `log_dehydrate`, `log_rehydrate`, `log_vault_status`, `log_archive_session`, `log_archive_gnosis`, `log_search_archives`, `log_prune_hysteresis`
+
+### Docker
 
 ```bash
-cd vault && docker-compose up -d
+cd LOG-mcp
+docker compose -f docker/docker-compose.yml up -d
+# Vault running at http://localhost:8000
+# Health check at http://localhost:8000/health
 ```
 
-### 4. Test Core Functionality
+### Cloudflare Workers (Free)
 
 ```bash
-# Test dehydration
-python -m vault.cli dehydrate "Email my lawyer Sarah at sarah@firm.com"
-# Expected output: "Email my lawyer <ENTITY_1> at <EMAIL_1>"
+cd LOG-mCP/cloudflare/worker
+npm install
+# Set your API keys
+echo "AI_API_KEY=your-key" > .dev.vars
+echo "PROVIDER_ENDPOINT=https://api.deepseek.com/v1/chat/completions" >> .dev.vars
 
-# Test rehydration
-python -m vault.cli rehydrate "Email my lawyer <ENTITY_1> at <EMAIL_1>"
-# Should restore original text if session exists
-
-# Check system status
-python -m vault.cli status
+# Deploy
+wrangler deploy
+# Your privacy proxy is live at your-worker.workers.dev
 ```
 
-### 5. Connect to Cloudflare (Optional)
+**Or via GitHub Actions:** Fork → add secrets → push to main → auto-deploys.
 
-```bash
-# Install wrangler CLI
-npm install -g wrangler
-wrangler login
-
-# Deploy your Ghost portal (requires ghost/ directory)
-cd ghost && wrangler deploy
-```
-
-## Environment Variables
-
-See `.env.example` for all required and optional variables. Key variables include:
-
-- `VAULT_DB_PATH`: Path to SQLite database
-- `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`: For external scout connectors
-- `REDACTOR_HOST`, `REDACTOR_PORT`: Local redactor service settings
-- Cloudflare settings for Ghost deployment
-
-## Target Hardware
-
-**Primary: NVIDIA Jetson Orin Nano 8GB**
-- 40 TOPS AI performance
-- Runs local redactor models (Llama-3.2-1B, Qwen2.5-1.5B, Phi-3-mini)
-- Handles PII detection, dehydration, hysteresis pruning
-- Vision-capable variant available (Orin Nano with camera module)
-- Headless operation — no display needed
-- ~$250 USD — the sweet spot for price/performance
-
-**Also supported:** Jetson Orin NX 16GB, AGX Orin 64GB, any Linux machine with Python 3.10+
-
-## Project Structure
+## Architecture
 
 ```
 LOG-mcp/
-├── vault/              # Local engine (The Vault)
-│   ├── cli/            # Python CLI tool
-│   ├── redactor/       # Local LLM redaction service
-│   ├── archiver/       # Session archiver + summary engine
-│   ├── pruner/         # Hysteresis garbage collector
-│   ├── sqlite/         # RealLog database schemas
-│   └── docker-compose.yml
-├── ghost/              # Cloudflare Worker (The Ghost)
-│   ├── worker/         # Worker source
-│   ├── pages/          # Dashboard (React/Hono)
-│   └── wrangler.toml
-├── mcp/                # MCP Server (agent interface)
-│   ├── server.py       # MCP tool definitions
-│   └── transport/      # stdio + HTTP transports
-├── scouts/             # Agent connectors
-│   ├── claude.py
-│   ├── deepseek.py
-│   └── base.py
-├── docs/               # Documentation
-├── scripts/            # Setup and utility scripts
-└── README.md           # This file
+├── vault/                  # Core engine
+│   ├── core.py            # RealLog DB, Dehydrator, Rehydrator
+│   ├── archiver.py        # Session archiving + gnosis extraction
+│   ├── cli.py             # CLI interface
+│   └── reallog_db.py      # Database schema + migrations
+├── mcp/
+│   └── server.py          # MCP server (JSON-RPC over stdio)
+├── scouts/                 # Agent connectors
+│   ├── base.py            # Base scout interface
+│   ├── claude.py          # Claude connector
+│   └── deepseek_scout.py  # DeepSeek connector
+├── cloudflare/
+│   ├── worker/            # Cloudflare Worker (privacy proxy)
+│   └── pages/             # Landing page + interactive demo
+├── docker/
+│   ├── Dockerfile         # Multi-stage container
+│   └── docker-compose.yml # Full stack (vault + optional Ollama)
+├── tests/
+│   ├── test_core.py       # 7 unit tests
+│   ├── test_extended.py   # 29 comprehensive tests
+│   └── demo_e2e.py        # 7 end-to-end scenario demos
+├── ROADMAP.md             # 8-phase development plan
+└── pyproject.toml
 ```
 
-## MCP Tools (Agent Vocabulary)
+## Roadmap Highlights
 
-The MCP server in `mcp/server.py` provides the following tools for agents:
+| Phase | What | Status |
+|-------|------|--------|
+| 0 | Regex PII, SQLite, MCP, CLI | ✅ Done |
+| 1 | Local LLM redaction (Jetson GPU) | Next |
+| 2 | Intelligent provider routing | Planned |
+| 3 | Vector search + memory management | Planned |
+| 4 | API rate limit optimization | Planned |
+| 5 | Self-improving daemon (RL) | Planned |
+| 6 | Multi-agent ecosystem (AutoClaw-inspired) | Planned |
+| 7 | Autonomous intelligence | Planned |
 
-### Hot Memory (Live)
+See [ROADMAP.md](ROADMAP.md) for the full plan with technical details and timelines.
 
-| Tool | Description |
-|---|---|
-| `log_dehydrate` | Strip PII from text, return safe pseudonymized version |
-| `log_rehydrate` | Swap `LOG_ID` placeholders back to real values |
+## Tests
 
-### Archive & Search
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v
+# 37 passed
+```
 
-| Tool | Description |
-|---|---|
-| `log_archive_session` | Archive a conversation session with metadata |
-| `log_search_archives` | Search archived sessions by keyword |
-| `log_archive_gnosis` | Extract permanent lessons from completed sessions |
+Plus 46 end-to-end checks covering realistic scenarios: medical records (HIPAA), attorney-client privilege, financial data, multi-agent collaboration, multi-turn conversations.
 
-### System Management
+## Under the Hood
 
-| Tool | Description |
-|---|---|
-| `log_prune_hysteresis` | Garbage collect old data based on hysteresis settings |
-| `log_vault_status` | Check vault health and statistics |
-
-> Note: Some tools mentioned in earlier documentation (like `log_distill`, `log_ghost_sync`, `log_request_scout`, `log_issue_report`) are planned but not yet implemented in the current version.
+- **Thread-safe** SQLite with proper locking for concurrent access
+- **Persistent connection pooling** — no connection overhead per operation
+- **44 dehydrations/sec** on Jetson Orin Nano (regex path)
+- **Consistent entity IDs** across sessions — same email always gets the same placeholder
+- **Atomic check-and-insert** prevents race conditions in multi-agent setups
 
 ## Privacy Guarantee
 
-> Your Jetson. Your Cloudflare account. Your data.
->
-> The L.O.G. developers never see your data. Your `(username).log.ai` is sovereign territory. The Vault never opens ports. The Ghost never stores real names. The Scouts never see the RealLog.
-
-## Philosophy
-
-L.O.G. is built on one principle: **the gap between your thoughts and an agent's actions should contain a wall, not a pipe.**
-
-Most systems route your raw data directly to cloud APIs. L.O.G. inserts a mandatory dehydration step — nothing leaves your hardware until it's been scrubbed clean. The "Working-Fiction" that agents see is useful enough to get the job done, but useless to anyone trying to reconstruct your identity.
-
-The hysteresis pruning system ensures your data doesn't grow forever. Memories cool down naturally — from Hot (immediate) to Warm (searchable) to Cold (archived) to Gnosis (permanent lessons). When the cold storage hits your configured limit, the garbage collector prunes intelligently — keeping patterns, discarding raw text.
+- Your data never leaves your machine unredacted
+- No telemetry, no phone home, no analytics
+- SQLite database is local — no cloud sync of real PII
+- MIT licensed, fully auditable
 
 ## Contributing
 
-This is an open system. Fork it. Run it on your Jetson. Make it yours.
-
-See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines.
+Fork it. Run it. Break it. Fix it. Open a PR.
 
 ## License
 

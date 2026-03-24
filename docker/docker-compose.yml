@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+  # ── LOG-mcp Vault ─────────────────────────────────────────────────
+  vault:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: log-mcp-vault
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+    volumes:
+      - vault-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-m", "vault.cli", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ── Optional: Local LLM via Ollama ────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: log-mcp-ollama
+    restart: unless-stopped
+    profiles:
+      - local-llm
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── Optional: Cloudflare Tunnel ──────────────────────────────────
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: log-mcp-tunnel
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
+    depends_on:
+      - vault
+
+volumes:
+  vault-data:
+  ollama-data:

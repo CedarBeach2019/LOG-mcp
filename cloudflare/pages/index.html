@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LOG-mcp — Privacy Middleware for AI</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{--bg:#0a0a0f;--surface:#12121a;--surface2:#1a1a28;--border:#2a2a3a;--text:#e4e4f0;--dim:#8888a8;--accent:#7c5cff;--accent2:#a78bfa;--green:#22c55e;--red:#ef4444}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
+  a{color:var(--accent2);text-decoration:none}a:hover{color:#c4b5fd}
+
+  .hero{text-align:center;padding:100px 24px 60px;position:relative}
+  .hero::before{content:'';position:absolute;top:-200px;left:50%;transform:translateX(-50%);width:800px;height:800px;background:radial-gradient(circle,rgba(124,92,255,.08) 0%,transparent 70%);pointer-events:none}
+  .badge{display:inline-block;padding:4px 14px;border-radius:20px;border:1px solid var(--border);font-size:.8rem;color:var(--dim);margin-bottom:24px;background:var(--surface)}
+  h1{font-size:clamp(2.5rem,6vw,4rem);font-weight:800;letter-spacing:-.03em;margin-bottom:16px;background:linear-gradient(135deg,#fff 40%,var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .subtitle{font-size:1.15rem;color:var(--dim);max-width:600px;margin:0 auto 40px}
+
+  .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;max-width:900px;margin:0 auto;padding:40px 24px 80px}
+  .feature{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;transition:border-color .2s}
+  .feature:hover{border-color:var(--accent)}
+  .feature h3{font-size:1rem;margin-bottom:8px;color:#fff}
+  .feature p{font-size:.9rem;color:var(--dim)}
+  .feature .icon{font-size:1.5rem;margin-bottom:12px;display:block}
+
+  /* Demo */
+  .demo{max-width:700px;margin:0 auto;padding:0 24px 80px}
+  .demo h2{font-size:1.6rem;margin-bottom:8px;text-align:center}
+  .demo>p{text-align:center;color:var(--dim);margin-bottom:24px}
+  textarea{width:100%;height:120px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;color:var(--text);font-family:inherit;font-size:.95rem;resize:vertical;outline:none;transition:border-color .2s}
+  textarea:focus{border-color:var(--accent)}
+  .demo-row{display:flex;gap:12px;margin-top:16px;flex-wrap:wrap}
+  .btn{padding:10px 24px;border-radius:8px;border:none;cursor:pointer;font-size:.9rem;font-weight:600;transition:all .2s}
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-primary:hover{background:#6b4fe0}
+  .btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}
+  .btn-outline:hover{border-color:var(--accent)}
+  .result{margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;font-family:'SF Mono',monospace;font-size:.85rem;white-space:pre-wrap;word-break:break-all;min-height:60px;color:var(--green)}
+
+  /* Architecture */
+  .arch{max-width:800px;margin:0 auto;padding:0 24px 80px}
+  .arch h2{font-size:1.6rem;margin-bottom:24px;text-align:center}
+  .arch-diagram{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;display:flex;align-items:center;justify-content:center;gap:0;flex-wrap:wrap}
+  .arch-box{text-align:center;padding:20px 24px;border:1px solid var(--border);border-radius:10px;background:var(--bg);min-width:140px}
+  .arch-box.active{border-color:var(--accent);box-shadow:0 0 20px rgba(124,92,255,.15)}
+  .arch-box .label{font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px}
+  .arch-box .value{font-weight:700;font-size:1rem}
+  .arch-arrow{color:var(--dim);font-size:1.4rem;padding:0 8px}
+
+  /* Install */
+  .install{max-width:900px;margin:0 auto;padding:0 24px 80px}
+  .install h2{font-size:1.6rem;margin-bottom:24px;text-align:center}
+  .install-tabs{display:flex;gap:8px;margin-bottom:24px;justify-content:center;flex-wrap:wrap}
+  .tab{padding:8px 20px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;font-size:.85rem;font-weight:500;transition:all .2s}
+  .tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .tab-content{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px;display:none}
+  .tab-content.active{display:block}
+  pre{background:var(--bg);border-radius:8px;padding:16px;overflow-x:auto;font-size:.85rem;line-height:1.7;color:#c4b5fd}
+  .tab-content p{color:var(--dim);font-size:.9rem;margin-bottom:12px}
+
+  footer{text-align:center;padding:40px 24px;color:var(--dim);font-size:.85rem;border-top:1px solid var(--border)}
+  footer a{margin:0 8px}
+
+  @media(max-width:600px){
+    .arch-diagram{flex-direction:column;gap:12px}
+    .arch-arrow{transform:rotate(90deg)}
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="badge">🔒 Open Source · MIT License</div>
+  <h1>Your data stays yours.</h1>
+  <p class="subtitle">LOG-mcp is a privacy middleware for AI. Strip PII before it reaches any AI provider. Rehydrate the response. Zero trust, zero leaks.</p>
+  <a href="https://github.com/lucineer/LOG-mcp" class="btn btn-primary" style="font-size:1rem;padding:14px 32px">⭐ Star on GitHub</a>
+</div>
+
+<div class="features">
+  <div class="feature">
+    <span class="icon">🛡️</span>
+    <h3>PII Stripping</h3>
+    <p>Regex-based detection for emails, phones, SSNs, credit cards, API keys, addresses, and IPs — replaced with typed placeholders.</p>
+  </div>
+  <div class="feature">
+    <span class="icon">🔄</span>
+    <h3>Transparent Proxy</h3>
+    <p>Drop-in replacement for OpenAI's API. Same format, same streaming. Your app doesn't know the difference.</p>
+  </div>
+  <div class="feature">
+    <span class="icon">☁️</span>
+    <h3>Edge-First</h3>
+    <p>Runs on Cloudflare Workers with KV storage. Sub-10ms overhead. No cold starts. Global by default.</p>
+  </div>
+</div>
+
+<div class="demo">
+  <h2>Try It</h2>
+  <p>Paste text with PII and watch it get stripped — entirely client-side.</p>
+  <textarea id="input" placeholder="Try: &quot;Email jane@example.com or call 555-123-4567. SSN: 123-45-6789. Card: 4111111111111111&quot;">Email jane@example.com or call 555-123-4567. SSN: 123-45-6789. Card: 4111111111111111. API key: sk_demo_abcd1234efgh5678</textarea>
+  <div class="demo-row">
+    <button class="btn btn-primary" onclick="dehydrate()">🛡️ Dehydrate</button>
+    <button class="btn btn-outline" onclick="rehydrate()">💧 Rehydrate</button>
+  </div>
+  <div class="result" id="output">Result appears here…</div>
+</div>
+
+<div class="arch">
+  <h2>Architecture</h2>
+  <div class="arch-diagram">
+    <div class="arch-box"><div class="label">Client</div><div class="value">Your App</div></div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box active"><div class="label">LOG-mcp</div><div class="value">🛡️ Vault</div></div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box"><div class="label">Provider</div><div class="value">OpenAI / etc</div></div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box active"><div class="label">LOG-mcp</div><div class="value">💧 Rehydrate</div></div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box"><div class="label">Client</div><div class="value">Clean Response</div></div>
+  </div>
+</div>
+
+<div class="install">
+  <h2>Get Started</h2>
+  <div class="install-tabs">
+    <button class="tab active" onclick="showTab('cf')">☁️ Cloudflare</button>
+    <button class="tab" onclick="showTab('local')">🖥️ Cloudflare + Local</button>
+    <button class="tab" onclick="showTab('docker')">🐳 Docker</button>
+  </div>
+  <div class="tab-content active" id="tab-cf">
+    <p>Deploy the Worker to Cloudflare. PII stored in KV, zero infrastructure.</p>
+    <pre>git clone https://github.com/lucineer/LOG-mcp.git
+cd LOG-mcp/cloudflare/worker
+npm install
+
+# Create KV namespace for PII mappings
+wrangler kv namespace create PII_MAP
+
+# Set your AI provider API key
+wrangler secret put API_KEY
+
+# Deploy
+wrangler deploy</pre>
+  </div>
+  <div class="tab-content" id="tab-local">
+    <p>Run the full Python backend locally with the Cloudflare Worker as edge proxy.</p>
+    <pre># Deploy worker first (see Cloudflare tab)
+cd LOG-mcp
+pip install -e .
+
+# Configure local vault
+log-mcp init --provider openai --model gpt-4
+
+# Start MCP server
+log-mcp serve --port 8000
+
+# Update worker PROVIDER_ENDPOINT to point to your local server</pre>
+  </div>
+  <div class="tab-content" id="tab-docker">
+    <p>Full stack with Docker Compose — vault, optional Ollama for local LLM, and Cloudflare Tunnel.</p>
+    <pre>git clone https://github.com/lucineer/LOG-mcp.git
+cd LOG-mcp
+cp .env.example .env
+# Edit .env with your API keys
+
+docker compose -f cloudflare/docker/docker-compose.yml up -d
+
+# Vault: http://localhost:8000
+# Health: http://localhost:8080</pre>
+  </div>
+</div>
+
+<footer>
+  <p>LOG-mcp by <a href="https://github.com/lucineer">lucineer</a> · <a href="https://github.com/lucineer/LOG-mcp">GitHub</a> · MIT License</p>
+</footer>
+
+<script>
+// Client-side dehydrate/rehydrate demo — no backend needed
+let store = {};
+
+const PATTERNS = [
+  { type: 'EMAIL', re: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g },
+  { type: 'PHONE', re: /(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g },
+  { type: 'SSN', re: /\b\d{3}-\d{2}-\d{4}\b/g },
+  { type: 'CC', re: /\b(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|3[47]\d{13}|6(?:011|5\d{2})\d{12})\b/g },
+  { type: 'API_KEY', re: /\b(?:sk|pk|api[_-]?key|secret)[_-][a-zA-Z0-9]{20,}\b/gi },
+  { type: 'IPV4', re: /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g },
+];
+
+function dehydrate() {
+  const text = document.getElementById('input').value;
+  store = {};
+  let result = text;
+  const counts = {};
+  for (const { type, re } of PATTERNS) {
+    const matches = text.match(re);
+    if (!matches) continue;
+    for (const m of [...new Set(matches)]) {
+      counts[type] = (counts[type] || 0) + 1;
+      const ph = `${type}_${counts[type]}`;
+      store[ph] = m;
+      result = result.split(m).join(ph);
+    }
+  }
+  document.getElementById('output').textContent = result;
+}
+
+function rehydrate() {
+  const text = document.getElementById('input').value;
+  let result = text;
+  for (const [ph, orig] of Object.entries(store)) {
+    result = result.split(ph).join(orig);
+  }
+  document.getElementById('output').textContent = result;
+}
+
+function showTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>
