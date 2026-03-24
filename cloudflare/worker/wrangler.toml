@@ -2,21 +2,24 @@ name = "log-mcp-vault"
 main = "index.js"
 compatibility_date = "2024-01-01"
 
-# KV namespace for PII mappings — create with:
-#   wrangler kv namespace create PII_MAP
+[vars]
+PROVIDER_ENDPOINT = "https://api.deepseek.com/v1/chat/completions"
+
+# Replace these in .dev.vars (local) or Worker secrets (prod)
+# API_KEY = "your-deepseek-key"
+
+# KV for PII mappings (auto-expiry)
 [[kv_namespaces]]
 binding = "PII_MAP"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "ec30e1720b814b919657f651ba6bb999"
 
-# D1 database for audit logs — create with:
-#   wrangler d1 create log-vault
+# D1 for persistent vault storage
 [[d1_databases]]
-binding = "log_vault"
+binding = "LOG_VAULT"
 database_name = "log-vault"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "d08d40bc-7bc8-4b26-89b9-d4d388dd498a"
 
-[vars]
-PROVIDER_ENDPOINT = "https://api.openai.com/v1/chat/completions"
-
-# Secrets (set via `wrangler secret put`):
-#   API_KEY — your AI provider API key
+# Vectorize for semantic search
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "log-embeddings"
