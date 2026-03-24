@@ -3,15 +3,30 @@ name: Deploy LOG-mcp
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
-  deploy-worker:
-    name: Deploy Worker
+  test:
+    name: Run Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v
 
-      - uses: cloudflare/wrangler-action@v3
+  deploy-worker:
+    name: Deploy Worker
+    runs-on: ubuntu-latest
+    needs: test
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -24,7 +39,8 @@ jobs:
   deploy-pages:
     name: Deploy Pages
     runs-on: ubuntu-latest
-    needs: deploy-worker
+    needs: test
+    environment: production
     steps:
       - uses: actions/checkout@v4
 

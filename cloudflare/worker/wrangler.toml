@@ -1,6 +1,7 @@
 name = "log-mcp-vault"
 main = "index.js"
 compatibility_date = "2024-01-01"
+workers_dev = true
 
 [vars]
 PROVIDER_ENDPOINT = "https://api.deepseek.com/v1/chat/completions"
