@@ -114,7 +114,7 @@ class TestDehydrationRehydration:
         retrieved = self.reallog.get_session("test-session-123")
         
         assert retrieved is not None
-        assert retrieved.session_id == "test-session-123"
+        assert retrieved.id == "test-session-123"
         assert retrieved.summary == "Test session summary"
         assert retrieved.metadata["test"] == "value"
         
@@ -164,16 +164,16 @@ class TestDehydrationRehydration:
         dehydrated1, _ = dehydrator.dehydrate(text1)
         dehydrated2, _ = dehydrator.dehydrate(text2)
         
-        # Extract LOG_IDs from dehydrated text
+        # Extract entity IDs from dehydrated text (format: <TYPE_N>)
         import re
-        log_ids1 = re.findall(r'LOG_ID_[A-Z0-9]+', dehydrated1)
-        log_ids2 = re.findall(r'LOG_ID_[A-Z0-9]+', dehydrated2)
+        ids1 = re.findall(r'<[A-Z]+_\d+>', dehydrated1)
+        ids2 = re.findall(r'<[A-Z]+_\d+>', dehydrated2)
         
-        # Both should have at least one LOG_ID
-        assert len(log_ids1) > 0
-        assert len(log_ids2) > 0
-        # The same email should get the same LOG_ID
-        assert log_ids1[0] == log_ids2[0]
+        # Both should have at least one entity ID
+        assert len(ids1) > 0
+        assert len(ids2) > 0
+        # The same email should get the same entity ID
+        assert ids1[0] == ids2[0]
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

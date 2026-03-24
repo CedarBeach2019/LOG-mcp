@@ -19,13 +19,15 @@ from typing import Any, List, Dict, Optional
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from vault.core import RealLog, PIIEntity, MemoryTier
+from vault.core import RealLog, Dehydrator, Rehydrator, PIIEntity, MemoryTier
 from vault.archiver import (
     archive_session, search_archives, archive_gnosis,
     get_master_index, init_archive_dirs
 )
 
 reallog = RealLog()
+dehydrator = Dehydrator(reallog)
+rehydrator = Rehydrator(reallog)
 
 # Import GitHub scout tools
 GITHUB_AVAILABLE = False
@@ -163,7 +165,7 @@ def handle_log_dehydrate(arguments: dict) -> dict:
             PIIEntity(entity_id="", real_value=e["real_value"], entity_type=e["entity_type"])
             for e in arguments["force_entities"]
         ]
-    dehydrated, ents = reallog.dehydrate(text, entities)
+    dehydrated, ents = dehydrator.dehydrate(text)
     return {
         "dehydrated_text": dehydrated,
         "entities_detected": len(ents),
@@ -172,7 +174,7 @@ def handle_log_dehydrate(arguments: dict) -> dict:
 
 
 def handle_log_rehydrate(arguments: dict) -> dict:
-    return {"rehydrated_text": reallog.rehydrate(arguments["text"])}
+    return {"rehydrated_text": rehydrator.rehydrate(arguments["text"])}
 
 
 def handle_log_distill(arguments: dict) -> dict:
@@ -254,7 +256,7 @@ def handle_log_prune_hysteresis(arguments: dict) -> dict:
         cold = reallog.get_sessions(tier=MemoryTier.COLD, limit=100)
         pruned = 0
         for s in cold:
-            reallog.promote_session(s.session_id, MemoryTier.ICE)
+            reallog.promote_session(s.id, MemoryTier.ICE)
             pruned += 1
         return {"status": "pruned", "sessions_iced": pruned}
     return {"error": "unknown action"}

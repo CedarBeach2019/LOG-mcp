@@ -22,7 +22,7 @@ from pathlib import Path
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from vault.core import RealLog, PIIEntity, MemoryTier
+from vault.core import RealLog, Dehydrator, Rehydrator, PIIEntity, MemoryTier
 from vault.archiver import (
     archive_session, search_archives, archive_gnosis,
     get_master_index, init_archive_dirs, ARCHIVE_ROOT
@@ -49,7 +49,8 @@ def cmd_dehydrate(args):
             print("❌ No text provided", file=sys.stderr)
             sys.exit(1)
 
-        dehydrated, entities = log.dehydrate(text)
+        dehydrator = Dehydrator(log)
+        dehydrated, entities = dehydrator.dehydrate(text)
 
         if args.json:
             output = {
@@ -77,7 +78,8 @@ def cmd_rehydrate(args):
         print("❌ No text provided", file=sys.stderr)
         sys.exit(1)
 
-    rehydrated = log.rehydrate(text)
+    rehydrator = Rehydrator(log)
+    rehydrated = rehydrator.rehydrate(text)
     print(rehydrated)
 
 
@@ -180,8 +182,8 @@ def cmd_prune(args):
     cold_sessions = log.get_sessions(tier=MemoryTier.COLD, limit=100)
     if cold_sessions and args.auto:
         for s in cold_sessions:
-            log.promote_session(s.session_id, MemoryTier.ICE)
-            print(f"  🧊 Pruned: {s.topic[:50]}")
+            log.promote_session(s.id, MemoryTier.ICE)
+            print(f"  🧊 Pruned: {s.summary[:50]}")
 
     print(f"\n📊 Current stats:")
     cmd_status(args)
@@ -210,7 +212,7 @@ def cmd_entities(args):
         entity_type = args.values[0]
         real_value = " ".join(args.values[1:])
         log_id = log.next_log_id(entity_type)
-        entity = PIIEntity(log_id=log_id, real_value=real_value, entity_type=entity_type)
+        entity = PIIEntity(entity_id=log_id, entity_type=entity_type, real_value=real_value)
         log.register_entity(entity)
         print(f"✅ Registered <{log_id}> = [{entity_type}] ***")
 
