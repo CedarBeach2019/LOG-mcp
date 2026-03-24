@@ -1,10 +1,49 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
-.env
-*.db
-~/.log/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
-node_modules/
-.wrangler/
-.aider*
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Aider
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v4/
+
+# Environment
+.env
+.env.local
+
+# Vault data (user's actual private data — never commit)
+.log/
+vault/archives/
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
