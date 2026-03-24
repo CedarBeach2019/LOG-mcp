@@ -26,6 +26,11 @@ log = "vault.cli:main"
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vault*", "mcp*", "scouts*", "tests*"]
+exclude = ["tests*"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.0",

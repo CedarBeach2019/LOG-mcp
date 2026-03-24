@@ -108,6 +108,30 @@ class TestPIIDetection:
         assert "email" not in pii_types
         assert "phone" not in pii_types
         assert "ssn" not in pii_types
+    
+    def test_name_detection_improvements(self, dehydrator):
+        # Test that 'Email John Smith' doesn't get detected as a name
+        text = "Email John Smith about the project"
+        _, entities = dehydrator.dehydrate(text)
+        # 'Email' should not be part of a detected name
+        person_entities = [e for e in entities if e.entity_type == 'person']
+        # 'John Smith' might be detected, but 'Email John Smith' shouldn't be
+        for entity in person_entities:
+            assert 'Email' not in entity.real_value
+        
+        # Test that actual names are still detected
+        text2 = "Contact John Smith at john@example.com"
+        _, entities2 = dehydrator.dehydrate(text2)
+        person_entities2 = [e for e in entities2 if e.entity_type == 'person']
+        # 'John Smith' should be detected
+        assert any('John Smith' in e.real_value for e in person_entities2)
+        
+        # Test with common non-name words
+        text3 = "Send the document to The Office"
+        _, entities3 = dehydrator.dehydrate(text3)
+        person_entities3 = [e for e in entities3 if e.entity_type == 'person']
+        # 'The Office' should not be detected as a person
+        assert not any('The Office' in e.real_value for e in person_entities3)
 
     def test_address_detection(self, dehydrator):
         text = "Ship to 742 Evergreen Terrace, Springfield and 1600 Pennsylvania Avenue NW"

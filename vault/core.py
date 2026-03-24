@@ -93,45 +93,64 @@ class RealLog:
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = __import__('threading').Lock()
+        # Create a persistent connection
+        self._conn = None
         self._init_db()
+    
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get or create a persistent database connection."""
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path)
+            self._conn.row_factory = sqlite3.Row
+            # Enable foreign keys
+            self._conn.execute("PRAGMA foreign_keys = ON")
+        return self._conn
+    
+    def close(self):
+        """Close the persistent connection."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
     
     def _init_db(self):
         """Initialize database tables."""
-        with DatabaseConnection(self.db_path) as conn:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id TEXT PRIMARY KEY,
-                    timestamp TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    metadata TEXT DEFAULT '{}'
-                );
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-                );
-                CREATE TABLE IF NOT EXISTS pii_map (
-                    entity_id TEXT PRIMARY KEY,
-                    entity_type TEXT NOT NULL,
-                    real_value TEXT NOT NULL,
-                    created_at TEXT DEFAULT (datetime('now')),
-                    last_used TEXT DEFAULT (datetime('now'))
-                );
-                CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
-                CREATE INDEX IF NOT EXISTS idx_pii_type ON pii_map(entity_type);
-                CREATE INDEX IF NOT EXISTS idx_pii_value ON pii_map(real_value);
-            """)
+        conn = self._get_connection()
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                metadata TEXT DEFAULT '{}'
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS pii_map (
+                entity_id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                real_value TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_used TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+            CREATE INDEX IF NOT EXISTS idx_pii_type ON pii_map(entity_type);
+            CREATE INDEX IF NOT EXISTS idx_pii_value ON pii_map(real_value);
+        """)
+        conn.commit()
     
     def add_session(self, session: Session) -> None:
         """Add a new session."""
-        with DatabaseConnection(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO sessions (id, timestamp, summary, metadata) VALUES (?, ?, ?, ?)",
-                (session.id, session.timestamp, session.summary, json.dumps(session.metadata))
-            )
+        conn = self._get_connection()
+        conn.execute(
+            "INSERT INTO sessions (id, timestamp, summary, metadata) VALUES (?, ?, ?, ?)",
+            (session.id, session.timestamp, session.summary, json.dumps(session.metadata))
+        )
+        conn.commit()
     
     def add_message(self, message: Message) -> int:
         """Add a message and return its id."""
@@ -311,19 +330,84 @@ class Dehydrator:
             for match in re.finditer(pattern, text, re.IGNORECASE):
                 entities.append((entity_type, match.group()))
         
-        # NLP heuristics for names (simple approach)
-        # Look for title-case words that might be names
-        name_pattern = r'\b(?:Mr\.|Mrs\.|Ms\.|Dr\.)?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b'
+        # Improved name detection
+        # First pass: find all 2-3 word sequences of capitalized words
+        common_non_names = {
+            'Email', 'Send', 'Contact', 'Call', 'The', 'This', 'That', 'There',
+            'Hello', 'Please', 'Thank', 'Hi', 'Hey', 'To', 'From', 'Subject',
+            'Re', 'FW', 'Fwd', 'Attn', 'Attention', 'Dear', 'Regards', 'Sincerely',
+            'Best', 'Kind', 'Yours', 'Cordially', 'Respectfully', 'Also', 'Just',
+            'Then', 'Will', 'Would', 'Could', 'Should', 'About', 'After', 'Before',
+            'With', 'When', 'What', 'Where', 'Which', 'Have', 'Here', 'Some',
+            'Other', 'More', 'Only', 'Over', 'Into', 'Very', 'Much', 'Many',
+            'Such', 'Each', 'Every', 'Both', 'Few', 'Most', 'Than', 'Them',
+            'These', 'Those', 'Being', 'Made', 'Does', 'Did', 'How', 'Our',
+            'Your', 'Their', 'His', 'Her', 'My', 'Its', 'We', 'They', 'You',
+            'Not', 'But', 'And', 'Or', 'Nor', 'For', 'Yet', 'So',
+            'Account', 'Bank', 'Card', 'Case', 'Chapter', 'Company', 'Conference',
+            'Country', 'Department', 'Division', 'Document', 'Employee', 'Employer',
+            'Employment', 'Group', 'Insurance', 'Message', 'Note', 'Number',
+            'Office', 'Order', 'Page', 'Patient', 'Payment', 'Phone', 'Project',
+            'Record', 'Reference', 'Report', 'Request', 'Section', 'Server',
+            'State', 'Statement', 'System', 'Team', 'Ticket', 'Total', 'Transaction',
+            'Unit', 'User', 'Vault', 'Version', 'Week', 'World', 'Work',
+            'Ask', 'Tell', 'Give', 'Show', 'Bring', 'Take', 'Make', 'Find',
+            'Know', 'Think', 'Want', 'Need', 'Help', 'Try', 'Use', 'See',
+        }
+        titles = {'Mr', 'Mrs', 'Ms', 'Miss', 'Dr', 'Prof', 'Sir', 'Madam'}
+        
+        # Match sequences of 2-3 capitalized words
+        name_pattern = r'(?<![A-Za-z])([A-Z][a-z]{1,15})(?:\s+([A-Z][a-z]{1,15})){1,2}(?![A-Za-z])'
         for match in re.finditer(name_pattern, text):
-            # Basic filter to exclude common non-name words
-            common_words = {'The', 'This', 'That', 'There', 'Hello', 'Please', 'Thank'}
-            if match.group() not in common_words:
-                entities.append(('person', match.group()))
+            words = match.group().split()
+            
+            # Skip if ALL words are in common_non_names or titles
+            clean_words = [w for w in words if w.rstrip('.') not in common_non_names and w.rstrip('.') not in titles]
+            if len(clean_words) >= 2:
+                clean_name = ' '.join(clean_words)
+                # Skip if remaining words are too common
+                if not any(w in common_non_names for w in clean_words):
+                    entities.append(('person', clean_name))
+                elif len(clean_words) >= 2:
+                    # At least 2 non-common words — likely a real name
+                    entities.append(('person', clean_name))
         
         # Address detection (simple)
-        address_pattern = r'\b\d+\s+[A-Z][a-z]+\s+(?:Street|St|Avenue|Ave|Road|Rd|Lane|Ln)\b'
+        address_pattern = r'\b\d+\s+[A-Z][a-z]+\s+(?:Street|St|Avenue|Ave|Road|Rd|Lane|Ln|Boulevard|Blvd|Drive|Dr|Court|Ct)\b'
         for match in re.finditer(address_pattern, text, re.IGNORECASE):
             entities.append(('address', match.group()))
+        
+        # Passport number detection
+        passport_patterns = [
+            r'\b[A-Z][0-9]{8}\b',  # Standard format
+            r'\b[A-Z]{1,2}[0-9]{6,8}\b'  # Variant formats
+        ]
+        for pattern in passport_patterns:
+            for match in re.finditer(pattern, text):
+                entities.append(('passport', match.group()))
+        
+        # Non-ASCII support
+        # Chinese phone numbers
+        chinese_phone_pattern = r'\b1[3-9]\d{9}\b'
+        for match in re.finditer(chinese_phone_pattern, text):
+            entities.append(('phone', match.group()))
+        
+        # Russian names (Cyrillic)
+        russian_name_pattern = r'\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?\b'
+        for match in re.finditer(russian_name_pattern, text):
+            entities.append(('person', match.group()))
+        
+        # Chinese names (2-3 Han characters)
+        chinese_name_pattern = r'[\u4e00-\u9fff]{2,3}'
+        # To avoid matching random Chinese characters, we'll look for patterns that suggest names
+        # This is a simple approach - in practice, more context would be needed
+        # We'll look for sequences of 2-3 Han characters that are standalone or preceded/followed by common markers
+        chinese_context_pattern = r'(?:姓名|名字|称呼|为)[:：]?\s*([\u4e00-\u9fff]{2,3})|([\u4e00-\u9fff]{2,3})(?:先生|女士|小姐|老师)'
+        for match in re.finditer(chinese_context_pattern, text):
+            for group_num in range(1, 3):
+                if match.group(group_num):
+                    entities.append(('person', match.group(group_num)))
+                    break
         
         return entities
     
@@ -359,19 +443,19 @@ class Dehydrator:
     
     def _get_entity_by_value(self, real_value: str) -> Optional[PIIEntity]:
         """Retrieve entity by its real value."""
-        with DatabaseConnection(self.reallog.db_path) as conn:
-            row = conn.execute(
-                "SELECT entity_id, entity_type, real_value, created_at, last_used FROM pii_map WHERE real_value = ?",
-                (real_value,)
-            ).fetchone()
-            if row:
-                return PIIEntity(
-                    entity_id=row['entity_id'],
-                    entity_type=row['entity_type'],
-                    real_value=row['real_value'],
-                    created_at=row['created_at'],
-                    last_used=row['last_used']
-                )
+        conn = self.reallog._get_connection()
+        row = conn.execute(
+            "SELECT entity_id, entity_type, real_value, created_at, last_used FROM pii_map WHERE real_value = ?",
+            (real_value,)
+        ).fetchone()
+        if row:
+            return PIIEntity(
+                entity_id=row['entity_id'],
+                entity_type=row['entity_type'],
+                real_value=row['real_value'],
+                created_at=row['created_at'],
+                last_used=row['last_used']
+            )
         return None
     
     def _generate_entity_id(self, entity_type: str) -> str:
