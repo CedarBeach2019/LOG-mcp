@@ -6,6 +6,8 @@ from starlette.routing import Route
 
 from gateway.routes import (
     chat_completions,
+    drafts,
+    elaborate,
     feedback,
     health,
     login,
@@ -21,6 +23,8 @@ app = Starlette(
         Route("/", serve_index, methods=["GET"]),
         Route("/auth/login", login, methods=["POST"]),
         Route("/v1/chat/completions", chat_completions, methods=["POST"]),
+        Route("/v1/drafts", drafts, methods=["POST"]),
+        Route("/v1/elaborate", elaborate, methods=["POST"]),
         Route("/v1/feedback", feedback, methods=["POST"]),
         Route("/v1/preferences", preferences_list, methods=["GET"]),
         Route("/v1/preferences", preferences_set, methods=["POST"]),

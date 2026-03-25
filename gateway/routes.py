@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse
 from gateway.auth import create_token, get_jwt_secret, verify_token
 from gateway.deps import get_reallog, get_settings
 from vault.core import Dehydrator, Rehydrator
+from vault.draft_profiles import get_draft_profiles
 from vault.routing_script import classify, resolve_action
 
 logger = logging.getLogger("gateway.routes")
@@ -219,6 +220,233 @@ async def chat_completions(request: Request) -> JSONResponse:
         result["escalation_response"] = escalation_response
 
     return JSONResponse(result)
+
+
+async def _call_draft_profile(settings, api_key: str, profile: dict,
+                               messages: list[dict]) -> dict:
+    """Call a single draft profile. Returns result dict (never raises)."""
+    t0 = time.time()
+    name = profile["name"]
+    endpoint = getattr(settings, profile["endpoint_key"], "")
+    model = getattr(settings, profile["model_key"], "")
+    system_msg = {"role": "system", "content": profile["system"]}
+    body = {"model": model, "messages": [system_msg] + messages}
+    if "temperature" in profile:
+        body["temperature"] = profile["temperature"]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                endpoint,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body,
+                timeout=30.0,
+            )
+        latency = int((time.time() - t0) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            return {"profile": name, "response": content, "model": model, "latency_ms": latency, "error": None}
+        return {"profile": name, "response": None, "model": model, "latency_ms": latency,
+                "error": f"upstream {resp.status_code}"}
+    except Exception as exc:
+        latency = int((time.time() - t0) * 1000)
+        return {"profile": name, "response": None, "model": model, "latency_ms": latency,
+                "error": str(exc)}
+
+
+async def drafts(request: Request) -> JSONResponse:
+    """POST /v1/drafts — fire parallel draft calls across profiles."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    settings = get_settings()
+    reallog = get_reallog()
+    api_key = settings.api_key
+    if not api_key:
+        return JSONResponse({"error": "no API key configured"}, status_code=500)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    messages = body.get("messages", [])
+    if not messages:
+        return JSONResponse({"error": "no messages"}, status_code=400)
+
+    profiles = body.get("profiles") or get_draft_profiles()
+
+    # Dehydrate messages
+    dehydrator = Dehydrator(reallog=reallog)
+    dehydrated_messages = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if isinstance(content, str) and role in ("user", "system"):
+            content, _ = dehydrator.dehydrate(content)
+        dehydrated_messages.append({"role": role, "content": content})
+
+    # Fire all drafts in parallel
+    coros = [_call_draft_profile(settings, api_key, p, dehydrated_messages) for p in profiles]
+    results = await asyncio.gather(*coros)
+
+    # Rehydrate
+    rehydrator = Rehydrator(reallog=reallog)
+    for r in results:
+        if r["response"] is not None:
+            r["response"] = rehydrator.rehydrate(r["response"])
+
+    # Get user input for storage
+    user_content = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            user_content = msg.get("content", "")
+            break
+
+    session_id = "session_" + str(int(time.time()))
+    # Store each draft as its own interaction
+    for r in results:
+        reallog.add_interaction(
+            session_id=session_id,
+            user_input=user_content,
+            route_action="DRAFT",
+            route_reason=f"profile={r['profile']}",
+            target_model=r["model"],
+            response=r["response"] or f"[error: {r['error']}]",
+            response_latency_ms=r["latency_ms"],
+        )
+
+    return JSONResponse({"drafts": list(results)})
+
+
+async def elaborate(request: Request) -> JSONResponse:
+    """POST /v1/elaborate — expand a chosen draft into a full response."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    settings = get_settings()
+    reallog = get_reallog()
+    api_key = settings.api_key
+    if not api_key:
+        return JSONResponse({"error": "no API key configured"}, status_code=500)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    winner_profile = body.get("winner_profile", "")
+    all_drafts = body.get("all_drafts", [])
+    user_reasoning = body.get("user_reasoning", "")
+    original_messages = body.get("messages", [])
+    interaction_id = body.get("interaction_id")
+
+    if not winner_profile or not original_messages:
+        return JSONResponse({"error": "winner_profile and messages required"}, status_code=400)
+
+    # Find the winner profile config to get endpoint/model
+    all_profiles = get_draft_profiles()
+    winner_cfg = next((p for p in all_profiles if p["name"] == winner_profile), None)
+    if not winner_cfg:
+        return JSONResponse({"error": f"unknown profile: {winner_profile}"}, status_code=400)
+
+    endpoint = getattr(settings, winner_cfg["endpoint_key"], "")
+    model = getattr(settings, winner_cfg["model_key"], "")
+
+    # Build system prompt
+    prefs = reallog.get_preferences()
+    prefs_text = ", ".join(f"{k}={v}" for k, v in prefs.items())
+    preamble = Dehydrator.build_preamble()
+
+    other_drafts = [d for d in all_drafts if d.get("profile") != winner_profile]
+    other_lines = "\n".join(
+        f"- [{d.get('profile', '?')}] {d.get('response', '')}" for d in other_drafts
+    )
+    winner_draft = next((d for d in all_drafts if d.get("profile") == winner_profile), {})
+    winner_approach = winner_draft.get("response", "")
+
+    system_parts = [
+        f"{preamble}\n\nUser preferences: {prefs_text}",
+        f"The user saw multiple brief approaches and chose the '{winner_profile}' approach: \"{winner_approach}\"",
+    ]
+    if other_lines:
+        system_parts.append(f"Other approaches considered were:\n{other_lines}")
+    if user_reasoning:
+        system_parts.append(f"User chose you because: {user_reasoning}")
+    system_parts.append("Now give a full, detailed response to the user's question.")
+    system_content = "\n\n".join(system_parts)
+
+    # Dehydrate original messages
+    dehydrator = Dehydrator(reallog=reallog)
+    rehydrator = Rehydrator(reallog=reallog)
+    dehydrated_messages = []
+    for msg in original_messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if isinstance(content, str) and role in ("user", "system"):
+            content, _ = dehydrator.dehydrate(content)
+        dehydrated_messages.append({"role": role, "content": content})
+
+    system_msg = {"role": "system", "content": system_content}
+    upstream_messages = [system_msg] + dehydrated_messages
+
+    t0 = time.time()
+    status, data, err = await _call_model(endpoint, api_key, model, upstream_messages)
+    latency = int((time.time() - t0) * 1000)
+
+    if status != 200 or data is None:
+        return JSONResponse({"error": err or "elaboration failed"}, status_code=502)
+
+    response_text = rehydrator.rehydrate(data["choices"][0]["message"]["content"])
+
+    # Get user input
+    user_content = ""
+    for msg in reversed(original_messages):
+        if msg.get("role") == "user":
+            user_content = msg.get("content", "")
+            break
+
+    session_id = "session_" + str(int(time.time()))
+
+    # Store elaboration
+    elab_id = reallog.add_interaction(
+        session_id=session_id,
+        user_input=user_content,
+        route_action="ELABORATE",
+        route_reason=f"winner={winner_profile}",
+        target_model=model,
+        response=response_text,
+        response_latency_ms=latency,
+    )
+
+    # Store ranking metadata in the original interaction if provided
+    if interaction_id:
+        try:
+            conn = reallog._get_connection()
+            ranking = json.dumps({
+                "winner_profile": winner_profile,
+                "all_profiles": [d.get("profile") for d in all_drafts],
+                "user_reasoning": user_reasoning,
+                "draft_responses": {d.get("profile"): d.get("response") for d in all_drafts},
+            })
+            conn.execute(
+                "UPDATE interactions SET critique = ? WHERE id = ?",
+                (ranking, interaction_id)
+            )
+            conn.commit()
+        except Exception as exc:
+            logger.warning("Failed to store ranking: %s", exc)
+
+    return JSONResponse({
+        "choices": [{"message": {"role": "assistant", "content": response_text}}],
+        "interaction_id": elab_id,
+        "winner_profile": winner_profile,
+        "model": model,
+        "latency_ms": latency,
+    })
 
 
 async def feedback(request: Request) -> JSONResponse:

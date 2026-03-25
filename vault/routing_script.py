@@ -13,7 +13,7 @@ import re
 RULES = {
     "MANUAL_OVERRIDE": {
         "patterns": [
-            r"^/(local|cloud|reason|compare)\b",
+            r"^/(local|cloud|reason|compare|draft)\b",
         ],
         "action": "manual",
     },
@@ -112,5 +112,7 @@ def resolve_action(action: str, cheap_model_name: str,
         return ("escalation", escalation_model_name)
     elif action == "compare":
         return ("compare", cheap_model_name)  # both fire
+    elif action == "draft":
+        return ("draft", cheap_model_name)
     else:
         return ("cheap", cheap_model_name)

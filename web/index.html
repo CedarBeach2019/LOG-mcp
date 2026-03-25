@@ -88,6 +88,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .route-badge.fast{background:rgba(68,221,136,.12);color:#44dd88}
 .route-badge.deep{background:rgba(168,85,247,.12);color:#a855f7}
 .route-badge.compare{background:rgba(59,130,246,.12);color:#60a5fa}
+.route-badge.draft{background:rgba(255,170,50,.15);color:#ffaa32}
 .route-meta{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-muted);margin-bottom:6px}
 .route-model{font-family:var(--mono);font-size:11px}
 .route-conf{opacity:.7}
@@ -127,6 +128,40 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .empty-state .icon{font-size:40px;opacity:.4}
 .empty-state p{font-size:14px;max-width:280px}
 
+/* Draft mode */
+.draft-container{align-self:flex-start;width:100%;max-width:600px;margin:8px 0;animation:msgIn .3s ease-out}
+.draft-header{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:var(--text-muted)}
+.draft-header .draft-title{font-weight:600;color:var(--text);font-size:14px}
+.draft-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:8px;cursor:pointer;transition:all .2s;position:relative}
+.draft-card:hover{border-color:#3a3a5a;background:#14141f}
+.draft-card.ranked{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 2px 12px rgba(124,92,255,.15)}
+.draft-card-top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.draft-profile{font-size:11px;padding:2px 10px;border-radius:10px;font-weight:600;text-transform:uppercase;letter-spacing:.3px}
+.draft-profile.precise{background:rgba(59,130,246,.15);color:#60a5fa}
+.draft-profile.creative{background:rgba(68,221,136,.15);color:#44dd88}
+.draft-profile.deep{background:rgba(168,85,247,.15);color:#a855f7}
+.draft-profile.fast{background:rgba(255,170,50,.15);color:#ffaa32}
+.draft-model{font-size:11px;color:var(--text-muted);font-family:var(--mono)}
+.draft-latency{font-size:11px;color:var(--text-muted);margin-left:auto}
+.draft-rank{width:26px;height:26px;border-radius:50%;background:var(--surface-2);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--text-muted);flex-shrink:0;transition:all .2s}
+.draft-card.ranked .draft-rank{background:var(--accent);border-color:var(--accent);color:#fff}
+.draft-text{font-size:13.5px;line-height:1.6;color:var(--text);overflow:hidden;transition:max-height .3s ease;max-height:3.2em}
+.draft-text.expanded{max-height:none}
+.draft-text-toggle{font-size:11px;color:var(--accent);cursor:pointer;margin-top:4px;display:none}
+.draft-text.needs-expand+.draft-text-toggle{display:inline}
+.draft-card.ranked-1{border-color:#fbbf24;box-shadow:0 0 0 1px #fbbf24,0 2px 16px rgba(251,191,36,.15)}
+.draft-card.ranked-1 .draft-rank{background:#fbbf24;border-color:#fbbf24;color:#000}
+.draft-reasoning{display:flex;gap:8px;align-items:flex-end;margin-top:12px}
+.draft-reasoning input{flex:1;padding:10px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border-color .2s}
+.draft-reasoning input:focus{border-color:var(--accent)}
+.draft-reasoning input::placeholder{color:var(--text-muted)}
+.elaborate-btn{width:100%;padding:12px;margin-top:12px;background:var(--accent);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--font);transition:all .2s;display:none}
+.elaborate-btn.visible{display:block;animation:msgIn .2s ease-out}
+.elaborate-btn:hover{background:var(--accent-dim);transform:translateY(-1px)}
+.elaborate-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.draft-loading{text-align:center;padding:20px;font-size:14px;color:var(--text-muted);animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
+
 /* Input */
 #input-area{padding:16px 20px;background:var(--surface);border-top:1px solid var(--border);flex-shrink:0}
 #connection-label{font-size:11px;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:center;gap:6px}
@@ -140,10 +175,15 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 #send-btn:active{transform:scale(.93)}
 #send-btn:disabled{opacity:.35;cursor:not-allowed;transform:none}
 #send-btn svg{width:20px;height:20px}
+.btn-group{display:flex;gap:6px;align-items:flex-end}
+#draft-btn{width:44px;height:44px;flex-shrink:0;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;transition:all .2s}
+#draft-btn:hover{border-color:var(--accent);color:var(--accent)}
+#draft-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 2px 12px rgba(124,92,255,.3)}
 #footer{text-align:center;padding:8px 20px 12px;font-size:11px;color:var(--text-muted);flex-shrink:0;opacity:.5}
 @media(max-width:600px){
   .login-card{padding:36px 24px}
   .msg-row{max-width:92%}
+  .draft-container{max-width:95%}
   #chat-header{padding:12px 16px}
   #messages{padding:14px}
   #input-area{padding:12px 16px}
@@ -182,10 +222,13 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   <div id="input-area">
     <div id="connection-label"><span class="dot"></span>Connected</div>
     <div id="input-wrap">
-      <textarea id="message-input" placeholder="Type a message…" rows="1"></textarea>
-      <button id="send-btn" disabled>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-      </button>
+      <textarea id="message-input" placeholder="Type a message… (/draft for draft mode)" rows="1"></textarea>
+      <div class="btn-group">
+        <button id="draft-btn" title="Draft mode (generate multiple options)">🎯</button>
+        <button id="send-btn" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+        </button>
+      </div>
     </div>
   </div>
   <div id="footer">Powered by LOG-mcp</div>
@@ -209,6 +252,13 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   let sending = false;
   let privacyMode = localStorage.getItem('privacy_mode') !== 'off';
 
+  // ── Draft state ──
+  let draftMode = false;
+  let drafts = [];
+  let draftRanking = []; // array of draft indices in rank order
+  let draftInteractionId = null;
+  let draftContainer = null;
+
   const els = {
     loginScreen: $('#login-screen'), chatScreen: $('#chat-screen'),
     passphrase: $('#passphrase'), loginBtn: $('#login-btn'), loginError: $('#login-error'),
@@ -218,7 +268,16 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     settingsPanel: $('#settings-panel'), settingsOverlay: $('#settings-overlay'),
     settingsClose: $('#settings-close'), prefsList: $('#prefs-list'),
     prefsAdd: $('#prefs-add'), routingInfo: $('#routing-info'),
+    draftBtn: $('#draft-btn'),
   };
+
+  // ── Draft mode toggle ──
+  els.draftBtn.addEventListener('click', () => {
+    draftMode = !draftMode;
+    els.draftBtn.classList.toggle('active', draftMode);
+    els.input.placeholder = draftMode ? '🎯 Draft mode — type your prompt…' : 'Type a message… (/draft for draft mode)';
+    els.input.focus();
+  });
 
   // ── Privacy ──
   function updatePrivacy() {
@@ -300,7 +359,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
         if (nv && nv !== value) {
           try { await api('PUT', '/v1/preferences', { key, value: nv }); } catch {}
         }
-        loadPrefs(); // refresh
+        loadPrefs();
       };
       inp.addEventListener('keydown', e => { if (e.key === 'Enter') finish(); if (e.key === 'Escape') finish(); });
       inp.addEventListener('blur', finish);
@@ -431,15 +490,41 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   }
 
   async function send() {
-    const text = els.input.value.trim();
-    if (!text || sending || !token) return;
+    const raw = els.input.value.trim();
+    if (!raw || sending || !token) return;
+
+    // Check for /draft command
+    let text = raw;
+    let useDraft = draftMode;
+    if (text.startsWith('/draft ')) {
+      text = text.slice(7).trim();
+      useDraft = true;
+    }
+    if (!text) return;
+
     sending = true;
     els.sendBtn.disabled = true;
     els.input.value = '';
     els.input.style.height = 'auto';
     hideEmpty();
-    addMessage('user', text);
+    addMessage('user', raw);
     chatHistory.push({ role: 'user', content: text });
+
+    // Turn off draft toggle after use
+    if (draftMode) {
+      draftMode = false;
+      els.draftBtn.classList.remove('active');
+      els.input.placeholder = 'Type a message… (/draft for draft mode)';
+    }
+
+    if (useDraft) {
+      await sendDraft(text);
+    } else {
+      await sendNormal(text);
+    }
+  }
+
+  async function sendNormal(text) {
     const statusEl = addStatus('Sending…');
     scrollDown();
 
@@ -457,7 +542,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       statusEl.remove();
       addAssistantMessage(content, route, interactionId);
       chatHistory.push({ role: 'assistant', content });
-      // Handle escalation response for compare mode
       if (data.escalation_response) {
         addMessage('assistant', data.escalation_response);
         chatHistory.push({ role: 'assistant', content: data.escalation_response });
@@ -466,6 +550,330 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       statusEl.textContent = 'Error: ' + e.message;
       statusEl.style.color = 'var(--error)';
       statusEl.style.fontStyle = 'normal';
+    } finally {
+      sending = false;
+      els.sendBtn.disabled = !els.input.value.trim();
+      scrollDown();
+    }
+  }
+
+  // ── Draft mode flow ──
+  async function sendDraft(text) {
+    const statusEl = addStatus('🎯 Generating drafts…');
+    scrollDown();
+
+    try {
+      const r = await fetch(API + '/v1/drafts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ messages: chatHistory })
+      });
+      if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || 'Error ' + r.status); }
+      const data = await r.json();
+      statusEl.remove();
+
+      drafts = data.drafts || [];
+      draftRanking = [];
+      draftInteractionId = data.interaction_id || null;
+
+      if (drafts.length === 0) {
+        addMessage('assistant', 'No drafts were generated. Try a different prompt.');
+        sending = false;
+        els.sendBtn.disabled = !els.input.value.trim();
+        return;
+      }
+
+      renderDrafts();
+      scrollDown();
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+      statusEl.style.color = 'var(--error)';
+      statusEl.style.fontStyle = 'normal';
+      sending = false;
+      els.sendBtn.disabled = !els.input.value.trim();
+      scrollDown();
+    }
+  }
+
+  function renderDrafts() {
+    if (draftContainer) draftContainer.remove();
+
+    draftContainer = document.createElement('div');
+    draftContainer.className = 'draft-container';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'draft-header';
+    header.innerHTML = '<span class="draft-title">🎯 Draft Round — ' + drafts.length + ' options</span><span>Click to rank, then elaborate</span>';
+    draftContainer.appendChild(header);
+
+    // Cards
+    drafts.forEach((draft, i) => {
+      const card = document.createElement('div');
+      card.className = 'draft-card';
+      card.dataset.index = i;
+
+      const top = document.createElement('div');
+      top.className = 'draft-card-top';
+
+      const rankCircle = document.createElement('div');
+      rankCircle.className = 'draft-rank';
+      rankCircle.textContent = '?';
+
+      const profile = document.createElement('span');
+      profile.className = 'draft-profile ' + (draft.profile || 'precise');
+      profile.textContent = draft.profile || 'precise';
+
+      const model = document.createElement('span');
+      model.className = 'draft-model';
+      model.textContent = draft.model || '';
+
+      const latency = document.createElement('span');
+      latency.className = 'draft-latency';
+      latency.textContent = draft.latency_ms != null ? (draft.latency_ms / 1000).toFixed(1) + 's' : '';
+
+      top.append(rankCircle, profile, model, latency);
+      card.appendChild(top);
+
+      const textEl = document.createElement('div');
+      textEl.className = 'draft-text';
+      textEl.textContent = draft.response || '';
+      // Check if needs expansion
+      if (textEl.scrollHeight > textEl.clientHeight + 2 || (draft.response || '').length > 180) {
+        textEl.classList.add('needs-expand');
+      }
+      card.appendChild(textEl);
+
+      const toggle = document.createElement('span');
+      toggle.className = 'draft-text-toggle';
+      toggle.textContent = 'Show more';
+      toggle.addEventListener('click', e => {
+        e.stopPropagation();
+        const expanded = textEl.classList.toggle('expanded');
+        toggle.textContent = expanded ? 'Show less' : 'Show more';
+      });
+      card.appendChild(toggle);
+
+      card.addEventListener('click', () => rankDraft(i));
+      draftContainer.appendChild(card);
+    });
+
+    // Reasoning input
+    const reasoningWrap = document.createElement('div');
+    reasoningWrap.className = 'draft-reasoning';
+    const reasonInput = document.createElement('input');
+    reasonInput.type = 'text';
+    reasonInput.placeholder = 'Optional: tell the system why this approach is better';
+    reasoningWrap.appendChild(reasonInput);
+    draftContainer.appendChild(reasoningWrap);
+
+    // Elaborate button
+    const elabBtn = document.createElement('button');
+    elabBtn.className = 'elaborate-btn';
+    elabBtn.textContent = '⏳ Rank all drafts to elaborate';
+    elabBtn.disabled = true;
+    elabBtn.id = 'elaborate-btn';
+    draftContainer.appendChild(elabBtn);
+
+    els.messages.appendChild(draftContainer);
+    scrollDown();
+  }
+
+  function rankDraft(index) {
+    if (draftRanking.includes(index)) {
+      // Remove from ranking
+      draftRanking = draftRanking.filter(i => i !== index);
+    } else {
+      draftRanking.push(index);
+    }
+    updateDraftUI();
+  }
+
+  function updateDraftUI() {
+    if (!draftContainer) return;
+    const cards = draftContainer.querySelectorAll('.draft-card');
+
+    cards.forEach(card => {
+      const idx = parseInt(card.dataset.index);
+      const rank = draftRanking.indexOf(idx);
+      card.classList.remove('ranked', 'ranked-1');
+      const circle = card.querySelector('.draft-rank');
+
+      if (rank >= 0) {
+        card.classList.add('ranked');
+        circle.textContent = rank + 1;
+        if (rank === 0) card.classList.add('ranked-1');
+      } else {
+        circle.textContent = '?';
+      }
+    });
+
+    const btn = draftContainer.querySelector('.elaborate-btn');
+    if (draftRanking.length === drafts.length && drafts.length > 0) {
+      const winner = drafts[draftRanking[0]];
+      btn.textContent = '🏆 Elaborate #' + winner.profile;
+      btn.disabled = false;
+      btn.classList.add('visible');
+      if (!btn._bound) {
+        btn._bound = true;
+        btn.addEventListener('click', doElaborate);
+      }
+    } else {
+      const remaining = drafts.length - draftRanking.length;
+      btn.textContent = remaining > 0
+        ? '⏳ Rank ' + remaining + ' more draft' + (remaining > 1 ? 's' : '') + ' to elaborate'
+        : '⏳ Rank all drafts to elaborate';
+      btn.disabled = true;
+      btn.classList.toggle('visible', draftRanking.length > 0);
+      if (!btn._bound) {
+        btn._bound = true;
+        btn.addEventListener('click', doElaborate);
+      }
+    }
+  }
+
+  async function doElaborate() {
+    if (draftRanking.length !== drafts.length) return;
+
+    const winnerIdx = draftRanking[0];
+    const winner = drafts[winnerIdx];
+    const reasonInput = draftContainer.querySelector('.draft-reasoning input');
+    const reasoning = reasonInput ? reasonInput.value.trim() : '';
+
+    const btn = draftContainer.querySelector('.elaborate-btn');
+    btn.disabled = true;
+    btn.textContent = '✨ ' + winner.profile + ' is elaborating…';
+    btn.classList.remove('visible');
+
+    // Disable cards
+    draftContainer.querySelectorAll('.draft-card').forEach(c => c.style.pointerEvents = 'none');
+    reasonInput.disabled = true;
+
+    try {
+      const r = await fetch(API + '/v1/elaborate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({
+          interaction_id: draftInteractionId,
+          winner_profile: winner.profile,
+          all_drafts: drafts,
+          user_reasoning: reasoning,
+          messages: chatHistory
+        })
+      });
+      if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || 'Error ' + r.status); }
+      const data = await r.json();
+      const content = data.response || data.choices?.[0]?.message?.content || '(empty response)';
+      const elabInteractionId = data.interaction_id || draftInteractionId;
+
+      // Collapse draft view
+      draftContainer.style.transition = 'opacity .3s, max-height .4s';
+      draftContainer.style.opacity = '0';
+      draftContainer.style.maxHeight = draftContainer.scrollHeight + 'px';
+      setTimeout(() => {
+        draftContainer.style.maxHeight = '0';
+        draftContainer.style.overflow = 'hidden';
+      }, 50);
+      setTimeout(() => {
+        draftContainer.remove();
+        draftContainer = null;
+        drafts = [];
+        draftRanking = [];
+      }, 400);
+
+      // Show as assistant message with winner badge
+      const row = document.createElement('div');
+      row.className = 'msg-row assistant';
+      if (elabInteractionId != null) row.dataset.interactionId = elabInteractionId;
+
+      const metaWrap = document.createElement('div');
+      metaWrap.style.marginBottom = '6px';
+      const badge = document.createElement('span');
+      badge.className = 'route-badge draft';
+      badge.textContent = '🏆 ' + (winner.profile || 'draft');
+      metaWrap.appendChild(badge);
+
+      if (winner.model) {
+        const metaDetails = document.createElement('div');
+        metaDetails.className = 'route-meta';
+        const modelEl = document.createElement('span');
+        modelEl.className = 'route-model';
+        modelEl.textContent = winner.model;
+        metaDetails.appendChild(modelEl);
+        metaWrap.appendChild(metaDetails);
+      }
+      row.appendChild(metaWrap);
+
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.innerHTML = fmtMd(content);
+      row.appendChild(bubble);
+
+      // Feedback
+      if (elabInteractionId != null) {
+        const fb = document.createElement('div');
+        fb.className = 'msg-feedback';
+        const upBtn = document.createElement('button');
+        upBtn.className = 'fb-btn';
+        upBtn.textContent = '👍';
+        const downBtn = document.createElement('button');
+        downBtn.className = 'fb-btn';
+        downBtn.textContent = '👎';
+        let activeThumb = null;
+
+        upBtn.addEventListener('click', () => {
+          if (activeThumb === 'up') return;
+          if (activeThumb === 'down') { downBtn.textContent = '👎'; downBtn.classList.remove('active-down'); critique.classList.remove('visible'); }
+          activeThumb = 'up';
+          upBtn.textContent = '👍'; upBtn.classList.add('active-up');
+          api('POST', '/v1/feedback', { interaction_id: Number(elabInteractionId), feedback: 'up' }).catch(() => {});
+        });
+
+        downBtn.addEventListener('click', () => {
+          if (activeThumb === 'down') return;
+          if (activeThumb === 'up') { upBtn.textContent = '👍'; upBtn.classList.remove('active-up'); }
+          activeThumb = 'down';
+          downBtn.textContent = '👎'; downBtn.classList.add('active-down');
+          critique.classList.add('visible');
+          critInput.focus();
+          api('POST', '/v1/feedback', { interaction_id: Number(elabInteractionId), feedback: 'down' }).catch(() => {});
+        });
+
+        const critique = document.createElement('div');
+        critique.className = 'fb-critique';
+        const critInput = document.createElement('input');
+        critInput.placeholder = 'What could be better?';
+        const critBtn = document.createElement('button');
+        critBtn.textContent = 'Submit';
+        critBtn.addEventListener('click', () => {
+          const t = critInput.value.trim();
+          if (t) {
+            api('POST', '/v1/feedback', { interaction_id: Number(elabInteractionId), feedback: 'down', critique: t }).catch(() => {});
+          }
+          critInput.value = '';
+          critique.classList.remove('visible');
+        });
+        critInput.addEventListener('keydown', e => { if (e.key === 'Enter') critBtn.click(); });
+        critique.append(critInput, critBtn);
+
+        fb.append(upBtn, downBtn, critique);
+        row.appendChild(fb);
+      }
+
+      const time = document.createElement('div');
+      time.className = 'msg-time';
+      time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      row.appendChild(time);
+
+      els.messages.appendChild(row);
+      chatHistory.push({ role: 'assistant', content });
+
+    } catch (e) {
+      btn.textContent = 'Error: ' + e.message;
+      btn.style.color = 'var(--error)';
+      draftContainer.querySelectorAll('.draft-card').forEach(c => c.style.pointerEvents = '');
+      const reasonInput2 = draftContainer.querySelector('.draft-reasoning input');
+      if (reasonInput2) reasonInput2.disabled = false;
     } finally {
       sending = false;
       els.sendBtn.disabled = !els.input.value.trim();
