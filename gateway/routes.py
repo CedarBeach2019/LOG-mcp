@@ -241,6 +241,12 @@ async def chat_completions(request: Request):
     if not api_key:
         return JSONResponse({"error": "no API key configured"}, status_code=500)
 
+    # --- Streaming path ---
+    if body.get("stream"):
+        return await _stream_chat(settings, reallog, dehydrator, rehydrator,
+                                  upstream_messages, request_session_id, user_content, route,
+                                  endpoint, model_name, endpoint_type, api_key, t0)
+
     # --- Call model(s) ---
     escalation_response = None
     escalation_latency = None
@@ -522,6 +528,75 @@ async def elaborate(request: Request):
         "interaction_id": elab_id, "winner_profile": winner_profile,
         "model": model, "latency_ms": latency,
     })
+
+
+# ---------------------------------------------------------------------------
+# Streaming
+# ---------------------------------------------------------------------------
+
+async def _stream_chat(settings, reallog, dehydrator, rehydrator,
+                       upstream_messages, session_id, user_content, route,
+                       endpoint, model_name, endpoint_type, api_key, t0):
+    """Stream chat completion as Server-Sent Events."""
+    from starlette.responses import StreamingResponse
+    import json
+
+    status, lines, err = await call_model(endpoint, api_key, model_name,
+                                           upstream_messages, stream=True)
+    if status != 200 or lines is None:
+        return JSONResponse({"error": err or "stream failed"}, status_code=502)
+
+    full_text = ""
+
+    async def generate():
+        nonlocal full_text
+        try:
+            async for line in lines:
+                line = line.strip()
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    yield "data: [DONE]\n\n"
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        full_text += content
+                    yield f"data: {data_str}\n\n"
+                except json.JSONDecodeError:
+                    continue
+        finally:
+            # Store after streaming completes
+            if full_text:
+                rehydrated = rehydrator.rehydrate(full_text)
+                reallog.add_interaction(
+                    session_id=session_id, user_input=user_content,
+                    route_action=route["action"], route_reason=route.get("reason", ""),
+                    target_model=model_name, response=rehydrated,
+                    response_latency_ms=int((time.time() - t0) * 1000),
+                )
+                reallog.add_message(Message(
+                    session_id=session_id, role="assistant",
+                    content=rehydrated, timestamp=datetime.now().isoformat(),
+                ))
+
+    route_meta = json.dumps({
+        "action": route["action"], "reason": route.get("reason", ""),
+        "target_model": model_name, "confidence": route.get("confidence", 0),
+    })
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Route": route_meta,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

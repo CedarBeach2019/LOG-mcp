@@ -46,12 +46,34 @@ def authenticate(request: Request) -> JSONResponse | None:
 
 async def call_model(endpoint: str, api_key: str, model: str,
                      messages: list[dict], timeout: float = 60.0,
-                     temperature: float | None = None) -> tuple[int, dict | None, str]:
-    """Call an OpenAI-compatible API. Returns (status_code, json_data, error_str)."""
+                     temperature: float | None = None,
+                     stream: bool = False):
+    """Call an OpenAI-compatible API.
+
+    Returns (status_code, json_data, error_str) for non-streaming.
+    Returns (200, async_generator, "") for streaming.
+    """
     try:
-        body = {"model": model, "messages": messages}
+        body: dict = {"model": model, "messages": messages}
         if temperature is not None:
             body["temperature"] = temperature
+        if stream:
+            body["stream"] = True
+            client = get_client()
+            req = client.build_request(
+                "POST", endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+            resp = await client.send(req, stream=True, timeout=timeout)
+            if resp.status_code != 200:
+                text = await resp.aread()
+                return resp.status_code, None, f"upstream returned {resp.status_code}: {text[:200]}"
+            return 200, resp.aiter_lines(), ""
+
         client = get_client()
         resp = await client.post(
             endpoint,

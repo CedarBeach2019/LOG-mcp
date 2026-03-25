@@ -213,6 +213,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 #message-input{flex:1;padding:12px 16px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--font);font-size:15px;outline:none;resize:none;min-height:44px;max-height:160px;line-height:1.5;transition:border-color .2s}
 #message-input:focus{border-color:var(--accent)}
 #message-input::placeholder{color:var(--text-muted)}
+.cursor-blink{animation:blink 1s step-end infinite}@keyframes blink{50%{opacity:0}}
 #send-btn{width:44px;height:44px;flex-shrink:0;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s,transform .1s,opacity .2s}
 #send-btn:hover{background:var(--accent-dim)}
 #send-btn:active{transform:scale(.93)}
@@ -709,7 +710,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     scrollDown();
 
     try {
-      let body = { model: 'default', messages: chatHistory };
+      let body = { model: 'default', messages: chatHistory, stream: true };
       if (currentSessionId) body.session_id = currentSessionId;
       const r = await fetch(API + '/v1/chat/completions', {
         method: 'POST',
@@ -717,18 +718,60 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
         body: JSON.stringify(body)
       });
       if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || 'Error ' + r.status); }
-      const data = await r.json();
-      const content = data.choices?.[0]?.message?.content || '(empty response)';
-      const route = data.route || {};
-      const interactionId = data.interaction_id;
-      if (data.session_id) { currentSessionId = data.session_id; sessionStorage.setItem('session_id', currentSessionId); }
-      const cached = data.cached || false;
-      statusEl.remove();
-      addAssistantMessage(content, route, interactionId, cached);
-      chatHistory.push({ role: 'assistant', content });
-      if (data.escalation_response) {
-        addMessage('assistant', data.escalation_response);
-        chatHistory.push({ role: 'assistant', content: data.escalation_response });
+
+      // Get route metadata from headers
+      let route = {};
+      try { route = JSON.parse(r.headers.get('X-Route') || '{}'); } catch {}
+
+      // Check if streaming or cached
+      const ct = r.headers.get('content-type') || '';
+      if (ct.includes('text/event-stream')) {
+        // Streaming response
+        statusEl.textContent = 'Typing…';
+        const msgEl = addMessage('assistant', '');
+        msgEl.querySelector('.msg-content').innerHTML = '<span class="cursor-blink">▊</span>';
+        let fullContent = '';
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const dataStr = line.slice(6);
+            if (dataStr === '[DONE]') continue;
+            try {
+              const chunk = JSON.parse(dataStr);
+              const delta = chunk.choices?.[0]?.delta?.content || '';
+              if (delta) fullContent += delta;
+              msgEl.querySelector('.msg-content').textContent = fullContent + '▊';
+              scrollDown();
+            } catch {}
+          }
+        }
+        msgEl.querySelector('.msg-content').textContent = fullContent;
+        chatHistory.push({ role: 'assistant', content: fullContent });
+        statusEl.remove();
+      } else {
+        // Non-streaming (cached, etc.)
+        const data = await r.json();
+        const content = data.choices?.[0]?.message?.content || '(empty response)';
+        route = data.route || {};
+        const interactionId = data.interaction_id;
+        if (data.session_id) { currentSessionId = data.session_id; sessionStorage.setItem('session_id', currentSessionId); }
+        const cached = data.cached || false;
+        statusEl.remove();
+        addAssistantMessage(content, route, interactionId, cached);
+        chatHistory.push({ role: 'assistant', content });
+        if (data.escalation_response) {
+          addMessage('assistant', data.escalation_response);
+          chatHistory.push({ role: 'assistant', content: data.escalation_response });
+        }
       }
     } catch (e) {
       statusEl.textContent = 'Error: ' + e.message;
