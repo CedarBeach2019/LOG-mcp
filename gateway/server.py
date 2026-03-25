@@ -5,6 +5,9 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.routing import Route
 
 from gateway.routes import (
+    prompt_preview,
+    prompt_template_update,
+    prompt_templates_list,
     training_export,
     training_status,
     cache_clear,
@@ -98,6 +101,9 @@ routes = [
     Route("/v1/adaptive/suggest", adaptive_suggest, methods=["GET"]),
     Route("/v1/local/catalog", model_catalog, methods=["GET"]),
     Route("/v1/local/download", model_download, methods=["POST"]),
+    Route("/v1/prompt/templates", prompt_templates_list, methods=["GET"]),
+    Route("/v1/prompt/template/{name}", prompt_template_update, methods=["PUT"]),
+    Route("/v1/prompt/preview", prompt_preview, methods=["POST"]),
 ]
 
 

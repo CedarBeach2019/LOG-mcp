@@ -292,12 +292,26 @@ async def chat_completions(request: Request):
                     "cached": True, "latency_ms": latency,
                 })
 
-    # Build system message with preferences
+    # Build system message with preferences + prompt pipeline
     prefs = reallog.get_preferences()
     prefs_text = ", ".join(f"{k}={v}" for k, v in prefs.items())
     preamble = Dehydrator.build_preamble()
-    system_msg = {"role": "system", "content": f"{preamble}\n\nUser preferences: {prefs_text}"}
-    upstream_messages = [system_msg] + dehydrated_messages
+
+    # Apply prompt engineering pipeline (template selection, context window, few-shot)
+    from gateway.prompt_pipeline import apply_prompt_pipeline
+    template_override = body.get("system_prompt")
+    ctx_tokens = settings.local_ctx_size if endpoint_type == "local" else 4096
+    upstream_messages, prompt_meta = await apply_prompt_pipeline(
+        messages=dehydrated_messages,
+        route_action=route["action"],
+        route_reason=route.get("reason", ""),
+        preamble=preamble,
+        prefs_text=prefs_text,
+        session_id=request_session_id,
+        reallog=reallog,
+        template_override=template_override,
+        max_context_tokens=ctx_tokens,
+    )
 
     api_key = settings.api_key
     if not api_key:
@@ -465,6 +479,7 @@ async def chat_completions(request: Request):
             "target_model": route.get("target_model", model_name),
             "confidence": route.get("confidence", 0),
         },
+        "prompt": prompt_meta,
         "interaction_id": interaction_id,
         "session_id": request_session_id,
     }
@@ -1249,8 +1264,77 @@ async def session_delete(request: Request):
 # Stats
 # ---------------------------------------------------------------------------
 
-async def stats(request: Request):
-    """GET /stats — return system statistics."""
+async def prompt_templates_list(request: Request):
+    """GET /v1/prompt/templates — list available system prompt templates."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    from vault.prompt_intelligence import DEFAULT_SYSTEM_PROMPTS
+    # Check for custom templates in preferences
+    reallog = get_reallog()
+    custom = {}
+    try:
+        prefs = reallog.get_preferences()
+        for k, v in prefs.items():
+            if k.startswith("template_"):
+                name = k[len("template_"):]
+                custom[name] = v
+    except Exception:
+        pass
+    return JSONResponse({
+        "templates": {**DEFAULT_SYSTEM_PROMPTS, **custom},
+        "custom_count": len(custom),
+    })
+
+
+async def prompt_template_update(request: Request):
+    """PUT /v1/prompt/template/{name} — customize a template."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    name = request.path_params.get("name", "")
+    content = body.get("content", "")
+    if not name or not content:
+        return JSONResponse({"error": "name and content required"}, status_code=400)
+    reallog = get_reallog()
+    reallog.set_preference(f"template_{name}", content)
+    return JSONResponse({"ok": True, "name": name})
+
+
+async def prompt_preview(request: Request):
+    """POST /v1/prompt/preview — preview a message with template applied."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    messages = body.get("messages", [])
+    route_action = body.get("route_action", "cheap")
+    route_reason = body.get("route_reason", "")
+    template_override = body.get("template")
+    from gateway.prompt_pipeline import apply_prompt_pipeline
+    upstream, meta = await apply_prompt_pipeline(
+        messages=messages,
+        route_action=route_action,
+        route_reason=route_reason,
+        preamble="[preview]",
+        prefs_text="",
+        template_override=template_override,
+    )
+    return JSONResponse({"messages": upstream, "metadata": meta})
+
+
+# ---------------------------------------------------------------------------
+# Stats
     from starlette.responses import JSONResponse
     auth_err = authenticate(request)
     if auth_err is not None:
