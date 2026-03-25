@@ -110,6 +110,11 @@ class RealLog:
             self._conn.execute("PRAGMA foreign_keys = ON")
         return self._conn
 
+    @property
+    def db(self) -> sqlite3.Connection:
+        """Convenience alias for _get_connection()."""
+        return self._get_connection()
+
     def close(self):
         """Close the persistent connection."""
         if self._conn is not None:
@@ -144,6 +149,11 @@ class RealLog:
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
             CREATE INDEX IF NOT EXISTS idx_pii_type ON pii_map(entity_type);
             CREATE INDEX IF NOT EXISTS idx_pii_value ON pii_map(real_value);
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
         """)
         conn.commit()
 
