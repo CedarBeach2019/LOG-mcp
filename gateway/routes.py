@@ -169,10 +169,13 @@ async def chat_completions(request: Request):
             metadata={},
         ))
     # Store user message
-    reallog.add_message(Message(
-        session_id=request_session_id, role="user",
-        content=user_content, timestamp=datetime.now().isoformat(),
-    ))
+    try:
+        reallog.add_message(Message(
+            session_id=request_session_id, role="user",
+            content=user_content, timestamp=datetime.now().isoformat(),
+        ))
+    except Exception:
+        pass
 
     # --- PII dehydration ---
     t0 = time.time()
@@ -353,11 +356,22 @@ async def chat_completions(request: Request):
         response_latency_ms=route.get("response_latency_ms", int((time.time() - t0) * 1000)),
         escalation_latency_ms=escalation_latency,
     )
+    # Auto-summarize session from first user message
+    try:
+        existing = reallog.get_session(request_session_id)
+        if existing and (not existing.summary or existing.summary.strip() == ""):
+            summary = user_content[:80] + ("…" if len(user_content) > 80 else "")
+            reallog.update_session_summary(request_session_id, summary)
+    except Exception:
+        pass  # non-critical, don't fail the request
     # Store assistant response in session
-    reallog.add_message(Message(
-        session_id=request_session_id, role="assistant",
-        content=response_text, timestamp=datetime.now().isoformat(),
-    ))
+    try:
+        reallog.add_message(Message(
+            session_id=request_session_id, role="assistant",
+            content=response_text, timestamp=datetime.now().isoformat(),
+        ))
+    except Exception:
+        pass
 
     # --- Store in semantic cache ---
     if getattr(settings, 'cache_enabled', True) and endpoint_type != "compare":

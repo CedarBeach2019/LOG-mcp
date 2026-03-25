@@ -70,7 +70,7 @@ class DatabaseConnection:
 
     def __enter__(self) -> sqlite3.Connection:
         try:
-            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
             self.conn.row_factory = sqlite3.Row
             return self.conn
         except sqlite3.Error as e:
@@ -104,7 +104,7 @@ class RealLog:
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create a persistent database connection."""
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
             self._conn.row_factory = sqlite3.Row
             # Enable WAL mode for concurrent reads and foreign keys
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -180,9 +180,15 @@ class RealLog:
         """Add a new session."""
         conn = self._get_connection()
         conn.execute(
-            "INSERT INTO sessions (id, timestamp, summary, metadata) VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO sessions (id, timestamp, summary, metadata) VALUES (?, ?, ?, ?)",
             (session.id, session.timestamp, session.summary, json.dumps(session.metadata))
         )
+
+    def update_session_summary(self, session_id: str, summary: str) -> None:
+        """Update the summary of an existing session."""
+        conn = self._get_connection()
+        conn.execute("UPDATE sessions SET summary = ? WHERE id = ?", (summary, session_id))
+        # Don't commit here — caller manages transaction
         conn.commit()
 
     def add_message(self, message: Message) -> int:

@@ -43,12 +43,12 @@ async def test_create_session(headers):
 async def test_list_sessions(headers):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        # Create a session first
         await client.post("/v1/sessions", headers=headers)
         resp = await client.get("/v1/sessions", headers=headers)
         assert resp.status_code == 200
         data = resp.json()
         assert "sessions" in data
+        # At least the one we just created plus any from other tests
         assert len(data["sessions"]) >= 1
 
 
