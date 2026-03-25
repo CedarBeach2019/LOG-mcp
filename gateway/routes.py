@@ -209,8 +209,21 @@ async def chat_completions(request: Request):
         from vault.semantic_cache import _get_cache
         embed_fn = None
         try:
-            backend = get_local_manager().get_backend()
-            if backend and backend.is_loaded:
+            manager = get_local_manager()
+            backend = manager.get_backend()
+            subprocess_client = manager.get_subprocess_client()
+
+            if subprocess_client and subprocess_client.is_loaded:
+                # Subprocess mode: wrap async embed in sync call
+                import asyncio
+                client = subprocess_client
+                def sync_embed(text):
+                    try:
+                        return asyncio.run(client.aembed(text))
+                    except Exception:
+                        return None
+                embed_fn = sync_embed
+            elif backend and backend.is_loaded:
                 embed_fn = backend.embed
         except Exception:
             pass

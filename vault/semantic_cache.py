@@ -31,6 +31,9 @@ def _get_cache(settings, embed_fn=None) -> SemanticCache | None:
             ttl_hours=getattr(settings, 'cache_ttl_hours', 24),
             embed_fn=_cache_embed_fn,
         )
+    elif embed_fn is not None and _cache_instance.embed_fn is None:
+        # Update embed_fn on existing singleton (e.g., model loaded after first request)
+        _cache_instance.embed_fn = embed_fn
     return _cache_instance
 
 
