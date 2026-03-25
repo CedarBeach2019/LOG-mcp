@@ -70,7 +70,7 @@ class DatabaseConnection:
 
     def __enter__(self) -> sqlite3.Connection:
         try:
-            self.conn = sqlite3.connect(self.db_path)
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
             return self.conn
         except sqlite3.Error as e:
@@ -104,7 +104,7 @@ class RealLog:
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create a persistent database connection."""
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path)
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             # Enable foreign keys
             self._conn.execute("PRAGMA foreign_keys = ON")
