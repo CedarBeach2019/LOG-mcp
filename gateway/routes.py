@@ -1487,3 +1487,56 @@ async def adaptive_suggest(request: Request):
     return JSONResponse(get_adaptive_router().suggest_model(
         s.cheap_model_name, s.escalation_model_name
     ))
+
+
+async def model_catalog(request: Request):
+    """GET /v1/local/catalog — available models to download."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    s = get_settings()
+    from vault.model_lifecycle import MODEL_CATALOG, get_available_models, estimate_vram
+    installed = get_available_models(Path(s.local_models_dir))
+    installed_names = {m["catalog_match"] for m in installed if m["catalog_match"]}
+
+    catalog = []
+    for key, info in MODEL_CATALOG.items():
+        vram = estimate_vram(info["size_gb"])
+        catalog.append({
+            "key": key,
+            "display": info["display"],
+            "size_gb": info["size_gb"],
+            "recommended_quant": info["recommended_quant"],
+            "quants": info["available_quants"],
+            "context": info["context"],
+            "installed": key in installed_names,
+            "fits_on_gpu": vram["fits_on_gpu"],
+        })
+
+    return JSONResponse({"catalog": catalog, "installed": installed})
+
+
+async def model_download(request: Request):
+    """POST /v1/local/download — download a model from HuggingFace."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    model_key = body.get("model")
+    quant = body.get("quant")
+    if not model_key:
+        return JSONResponse({"error": "model key required"}, status_code=400)
+
+    s = get_settings()
+    from vault.model_lifecycle import download_model
+    result = download_model(model_key, Path(s.local_models_dir), quant)
+    status = 200 if result.get("success") else 400
+    return JSONResponse(result, status_code=status)

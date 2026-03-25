@@ -26,6 +26,8 @@ from gateway.routes import (
     adaptive_dashboard,
     adaptive_health,
     adaptive_suggest,
+    model_catalog,
+    model_download,
     preferences_delete,
     preferences_list,
     preferences_set,
@@ -94,6 +96,8 @@ routes = [
     Route("/v1/adaptive/dashboard", adaptive_dashboard, methods=["GET"]),
     Route("/v1/adaptive/health/{model_name}", adaptive_health, methods=["GET"]),
     Route("/v1/adaptive/suggest", adaptive_suggest, methods=["GET"]),
+    Route("/v1/local/catalog", model_catalog, methods=["GET"]),
+    Route("/v1/local/download", model_download, methods=["POST"]),
 ]
 
 
