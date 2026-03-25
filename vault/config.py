@@ -26,7 +26,7 @@ class VaultSettings(BaseSettings):
     cache_max_entries: int = 1000
     cache_ttl_hours: int = 24
     local_models_dir: Path = Path.home() / ".log" / "models"
-    local_gpu_layers: int = -1  # -1 = all layers on GPU
+    local_gpu_layers: int = 20  # GPU layers (20 fits in 8GB with KV cache; -1 for all)
     local_max_tokens: int = 512
     local_ctx_size: int = 4096
 

@@ -30,7 +30,7 @@ class LocalInferenceBackend:
     """Manages a single llama.cpp model for in-process inference.
 
     Thread-safe. Lazy-loads on first generate() call.
-    Uses prompt caching when system prompt is reused.
+    Embeddings use sentence-transformers (separate, CPU-based).
     """
 
     def __init__(self, model_path: Path, gpu_layers: int = -1, ctx_size: int = 4096):
@@ -38,8 +38,9 @@ class LocalInferenceBackend:
         self.gpu_layers = gpu_layers
         self.ctx_size = ctx_size
         self._model = None
+        self._embed_model = None
+        self._embed_model_name = "all-MiniLM-L6-v2"
         self._lock = threading.Lock()
-        self._last_system = None
         self._loaded_at = None
 
     def load(self) -> bool:
@@ -54,6 +55,7 @@ class LocalInferenceBackend:
                 n_gpu_layers=self.gpu_layers,
                 n_ctx=self.ctx_size,
                 verbose=False,
+                embedding=True,
             )
             self._loaded_at = time.time()
             logger.info("Loaded local model: %s (%d GPU layers)", self.model_path.name, self.gpu_layers)
@@ -125,15 +127,20 @@ class LocalInferenceBackend:
                 logger.error("Local streaming failed: %s", exc)
 
     def embed(self, text: str) -> list[float] | None:
-        """Get embeddings for a text. Useful for semantic caching."""
-        if not self.load():
+        """Get embeddings using sentence-transformers (CPU, 384 dims)."""
+        try:
+            if self._embed_model is None:
+                from sentence_transformers import SentenceTransformer
+                self._embed_model = SentenceTransformer(self._embed_model_name)
+            import numpy as np
+            emb = self._embed_model.encode(text)
+            return emb.tolist()
+        except ImportError:
+            logger.warning("sentence-transformers not installed. Embeddings disabled.")
             return None
-        with self._lock:
-            try:
-                result = self._model.embed(text)
-                return result
-            except Exception:
-                return None
+        except Exception as exc:
+            logger.error("Embedding failed: %s", exc)
+            return None
 
     def get_model_info(self) -> dict[str, Any]:
         """Return model metadata and resource usage."""
