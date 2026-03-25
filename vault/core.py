@@ -154,6 +154,24 @@ class RealLog:
                 value TEXT NOT NULL,
                 updated_at TEXT DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                user_input TEXT NOT NULL,
+                rewritten_input TEXT,
+                route_action TEXT NOT NULL,
+                route_reason TEXT,
+                target_model TEXT NOT NULL,
+                response TEXT NOT NULL,
+                escalation_response TEXT,
+                response_latency_ms INTEGER,
+                escalation_latency_ms INTEGER,
+                feedback TEXT DEFAULT NULL,
+                critique TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_interactions_route ON interactions(route_action);
+            CREATE INDEX IF NOT EXISTS idx_interactions_feedback ON interactions(feedback);
         """)
         conn.commit()
 
@@ -321,6 +339,100 @@ class RealLog:
         }.get(entity_type, 'ENT')
 
         return f"{type_prefix}_{count + 1}"
+
+
+    # -- Interaction tracking (Phase 2) --
+
+    def add_interaction(self, session_id: str, user_input: str, route_action: str,
+                       target_model: str, response: str, route_reason: str = "",
+                       rewritten_input: str = None, response_latency_ms: int = 0,
+                       escalation_response: str = None,
+                       escalation_latency_ms: int = None) -> int:
+        """Store a completed interaction for feedback tracking."""
+        conn = self._get_connection()
+        cursor = conn.execute(
+            """INSERT INTO interactions
+               (session_id, user_input, rewritten_input, route_action, route_reason,
+                target_model, response, escalation_response,
+                response_latency_ms, escalation_latency_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (session_id, user_input, rewritten_input, route_action, route_reason,
+             target_model, response, escalation_response,
+             response_latency_ms, escalation_latency_ms)
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+    def update_feedback(self, interaction_id: int, feedback: str,
+                        critique: str = None) -> bool:
+        """Update feedback (up/down) and optional critique for an interaction."""
+        conn = self._get_connection()
+        if critique:
+            conn.execute(
+                "UPDATE interactions SET feedback = ?, critique = ? WHERE id = ?",
+                (feedback, critique, interaction_id)
+            )
+        else:
+            conn.execute(
+                "UPDATE interactions SET feedback = ? WHERE id = ?",
+                (feedback, interaction_id)
+            )
+        conn.commit()
+        return conn.total_changes > 0
+
+    def get_interaction(self, interaction_id: int):
+        """Get a single interaction by ID."""
+        conn = self._get_connection()
+        return conn.execute(
+            "SELECT * FROM interactions WHERE id = ?", (interaction_id,)
+        ).fetchone()
+
+    def get_preferences(self) -> dict:
+        """Get all user preferences as a dict."""
+        conn = self._get_connection()
+        rows = conn.execute("SELECT key, value FROM user_preferences").fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+    def set_preference(self, key: str, value: str):
+        """Upsert a user preference."""
+        conn = self._get_connection()
+        conn.execute(
+            """INSERT INTO user_preferences (key, value, updated_at)
+               VALUES (?, ?, datetime('now'))
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+               updated_at = datetime('now')""",
+            (key, value)
+        )
+        conn.commit()
+
+    def delete_preference(self, key: str) -> bool:
+        """Delete a user preference. Returns True if it existed."""
+        conn = self._get_connection()
+        cursor = conn.execute(
+            "DELETE FROM user_preferences WHERE key = ?", (key,)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def _seed_default_preferences(self):
+        """Insert default preferences if they don't exist."""
+        defaults = {
+            "response_style": "concise",
+            "no_disclaimers": "true",
+            "tone": "casual",
+            "show_work": "false",
+            "format": "bullet_points",
+        }
+        for key, value in defaults.items():
+            existing = self.db.execute(
+                "SELECT 1 FROM user_preferences WHERE key = ?", (key,)
+            ).fetchone()
+            if not existing:
+                self.db.execute(
+                    "INSERT INTO user_preferences (key, value) VALUES (?, ?)",
+                    (key, value)
+                )
+        self.db.commit()
 
 
 class Dehydrator:
@@ -666,3 +778,8 @@ def create_message(session_id: str, role: str, content: str) -> Message:
         content=content,
         timestamp=datetime.now().isoformat()
     )
+
+
+# ---------------------------------------------------------------------------
+# Interaction tracking (Phase 2)
+# ---------------------------------------------------------------------------
