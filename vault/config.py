@@ -4,25 +4,6 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class ProviderProfile:
-    """A model configuration profile for draft/compare mode."""
-    def __init__(self, name: str, endpoint: str, model: str,
-                 temperature: float = 0.7, system: str = "", max_chars: int = 0):
-        self.name = name
-        self.endpoint = endpoint
-        self.model = model
-        self.temperature = temperature
-        self.system = system
-        self.max_chars = max_chars
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name, "endpoint": self.endpoint, "model": self.model,
-            "temperature": self.temperature, "system": self.system,
-            "max_chars": self.max_chars,
-        }
-
-
 class VaultSettings(BaseSettings):
     """Application settings. Override with LOG_ prefix env vars."""
 
