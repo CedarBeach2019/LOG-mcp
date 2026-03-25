@@ -13,7 +13,7 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
-from gateway.shared import authenticate, call_model, get_client, get_local_manager
+from gateway.shared import authenticate, get_client, get_local_manager
 from gateway.deps import get_reallog, get_settings
 from vault.core import Dehydrator, Rehydrator
 from vault.draft_profiles import get_draft_profiles

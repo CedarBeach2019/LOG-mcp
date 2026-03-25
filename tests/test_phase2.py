@@ -40,7 +40,7 @@ def _auth_headers(client):
 class TestRouting:
     def test_simple_question_routes_cheap(self, client):
         """'What is' questions should route to cheap model."""
-        with patch("gateway.routes.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("gateway.error_boundary.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (200, {
                 "choices": [{"message": {"content": "The capital is Paris."}}]
             }, "")
@@ -55,7 +55,7 @@ class TestRouting:
 
     def test_complex_question_escapes(self, client):
         """Debug questions should escalate."""
-        with patch("gateway.routes.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("gateway.error_boundary.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (200, {
                 "choices": [{"message": {"content": "The issue is..."}}]
             }, "")
@@ -70,7 +70,7 @@ class TestRouting:
 
     def test_response_has_route_metadata(self, client):
         """Every response must include route metadata and interaction_id."""
-        with patch("gateway.routes.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("gateway.error_boundary.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (200, {
                 "choices": [{"message": {"content": "OK"}}]
             }, "")
@@ -90,7 +90,7 @@ class TestRouting:
 class TestPIIProtectionPhase2:
     def test_no_pii_in_upstream(self, client):
         """PII must never reach upstream API."""
-        with patch("gateway.routes.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("gateway.error_boundary.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (200, {
                 "choices": [{"message": {"content": "Done."}}]
             }, "")
@@ -111,7 +111,7 @@ class TestPIIProtectionPhase2:
 class TestFeedback:
     def test_thumbs_up(self, client):
         """Can submit thumbs up feedback."""
-        with patch("gateway.routes.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("gateway.error_boundary.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (200, {
                 "choices": [{"message": {"content": "Done."}}]
             }, "")
@@ -134,7 +134,7 @@ class TestFeedback:
 
     def test_thumbs_down_with_critique(self, client):
         """Can submit thumbs down with critique."""
-        with patch("gateway.routes.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("gateway.error_boundary.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (200, {
                 "choices": [{"message": {"content": "Done."}}]
             }, "")
