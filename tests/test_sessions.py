@@ -16,7 +16,9 @@ def anyio_backend():
 
 
 @pytest.fixture
-async def auth_token():
+async def auth_token(tmp_path):
+    from gateway.deps import reset_all
+    reset_all(str(tmp_path / "test.db"))
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/auth/login", json={"passphrase": "testpass"})
@@ -101,11 +103,14 @@ async def test_chat_returns_session_id(headers):
         mock_response = {
             "choices": [{"message": {"role": "assistant", "content": "Hi!"}}],
         }
+        # Use unique message to avoid cache hits
+        import uuid
+        unique_msg = f"Hello unique {uuid.uuid4()}"
         with patch("gateway.routes.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (200, mock_response, "")
             resp = await client.post(
                 "/v1/chat/completions",
-                json={"messages": [{"role": "user", "content": "Hello"}]},
+                json={"messages": [{"role": "user", "content": unique_msg}]},
                 headers=headers,
             )
         assert resp.status_code == 200

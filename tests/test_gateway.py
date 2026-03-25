@@ -17,10 +17,8 @@ from gateway.server import app
 @pytest.fixture
 def client(tmp_path):
     """Test client with fresh vault."""
-    from gateway import deps
-    # Reset singletons
-    deps._settings = None
-    deps._reallog = None
+    from gateway.deps import reset_all
+    reset_all(str(tmp_path / "test.db"))
     return TestClient(app)
 
 

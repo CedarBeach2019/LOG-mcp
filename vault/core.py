@@ -183,6 +183,7 @@ class RealLog:
             "INSERT OR IGNORE INTO sessions (id, timestamp, summary, metadata) VALUES (?, ?, ?, ?)",
             (session.id, session.timestamp, session.summary, json.dumps(session.metadata))
         )
+        conn.commit()
 
     def update_session_summary(self, session_id: str, summary: str) -> None:
         """Update the summary of an existing session."""

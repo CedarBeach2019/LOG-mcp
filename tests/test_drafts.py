@@ -13,13 +13,12 @@ from gateway.server import app
 
 
 @pytest.fixture(autouse=True)
-def reset_deps():
-    from gateway import deps
-    deps._settings = None
-    deps._reallog = None
+def reset_deps(tmp_path):
+    """Reset singletons between tests with fresh DB."""
+    from gateway.deps import reset_all
+    reset_all(str(tmp_path / "test.db"))
     yield
-    deps._settings = None
-    deps._reallog = None
+    reset_all()
 
 
 @pytest.fixture
