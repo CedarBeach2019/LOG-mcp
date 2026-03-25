@@ -222,6 +222,27 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 #message-input:focus{border-color:var(--accent)}
 #message-input::placeholder{color:var(--text-muted)}
 .cursor-blink{animation:blink 1s step-end infinite}@keyframes blink{50%{opacity:0}}
+/* Session sidebar */
+#sidebar{position:fixed;left:0;top:0;bottom:0;width:280px;background:var(--surface);border-right:1px solid var(--border);z-index:100;transform:translateX(-100%);transition:transform .25s ease;display:flex;flex-direction:column}
+#sidebar.open{transform:translateX(0)}
+#sidebar-header{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:1px solid var(--border)}
+#sidebar-header h3{margin:0;font-size:14px}
+#sidebar-close{background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer}
+#sidebar-sessions{flex:1;overflow-y:auto;padding:8px}
+#sidebar-sessions .session-item{padding:10px 12px;border-radius:8px;cursor:pointer;margin-bottom:4px;font-size:13px;color:var(--text);transition:background .15s}
+#sidebar-sessions .session-item:hover{background:var(--surface-2)}
+#sidebar-sessions .session-item.active{background:var(--accent);color:#fff}
+#sidebar-sessions .session-item .session-time{font-size:11px;color:var(--text-muted);margin-top:2px}
+#sidebar-sessions .session-item.active .session-time{color:rgba(255,255,255,.7)}
+#sidebar-footer{padding:12px;border-top:1px solid var(--border);font-size:11px;color:var(--text-muted)}
+/* Keyboard shortcuts */
+.kbd{display:inline-block;padding:2px 6px;background:var(--surface-2);border:1px solid var(--border);border-radius:4px;font-size:11px;font-family:monospace;color:var(--text-muted)}
+/* Metrics panel */
+.metric-card{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px}
+.metric-card h4{margin:0 0 8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
+.metric-card .metric-value{font-size:22px;font-weight:700;color:var(--text)}
+.metric-card .metric-sub{font-size:12px;color:var(--text-muted);margin-top:4px}
+.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 /* Markdown rendering */
 .msg-content pre{background:#1a1b26;border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;margin:8px 0;font-size:13px}
 .msg-content code{background:#1a1b26;padding:2px 6px;border-radius:4px;font-size:13px}
@@ -352,10 +373,21 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <div style="font-size:11px;color:var(--text-muted);margin-top:4px" id="cache-hit-label">Hit rate: 0%</div>
       <button id="cache-clear-btn" style="width:100%;padding:8px;margin-top:10px;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);color:#fbbf24;border-radius:8px;cursor:pointer;font-size:13px;font-family:var(--font)">Clear Cache</button>
     </div>
+    <div class="sp-section"><h3>Metrics</h3>
+      <div id="metrics-panel" style="font-size:13px;color:var(--text-muted)">Loading…</div>
+    </div>
     <div class="sp-section"><h3>Routing</h3><div id="routing-info"></div></div>
   </div>
 </div>
 
+<div id="sidebar">
+  <div id="sidebar-header"><h3>💬 Sessions</h3><button id="sidebar-close">✕</button></div>
+  <div id="sidebar-sessions"></div>
+  <div id="sidebar-footer">
+    <span class="kbd">Ctrl+N</span> New &nbsp; <span class="kbd">Ctrl+B</span> Sidebar
+  </div>
+</div>
+<div id="sidebar-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99;display:none"></div>
 <div id="history-modal"><div id="history-panel"><div style="display:flex;justify-content:space-between;align-items:center"><h2>📋 Session History</h2><button id="close-history" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer">✕</button></div><div id="history-list"></div></div></div>
 <script>
 (() => {
@@ -1502,6 +1534,120 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   if (token) { showChat(); restoreLastSession(); }
   else els.passphrase.focus();
 })();
+
+// ═══════════════════════════════════════════════════════════════
+// Sidebar: Session navigation
+// ═══════════════════════════════════════════════════════════════
+(function initSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  const sessionList = document.getElementById('sidebar-sessions');
+
+  function toggleSidebar() {
+    const open = sidebar.classList.toggle('open');
+    overlay.style.display = open ? 'block' : 'none';
+    if (open) loadSidebarSessions();
+  }
+
+  function closeSidebar() {
+    sidebar.classList.remove('open');
+    overlay.style.display = 'none';
+  }
+
+  async function loadSidebarSessions() {
+    try {
+      const resp = await fetch('/v1/sessions', { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!resp.ok) return;
+      const { sessions } = await resp.json();
+      sessionList.innerHTML = sessions.length
+        ? sessions.map(s => `<div class="session-item${s.id === currentSessionId ? ' active' : ''}" data-id="${s.id}">
+            <div>${escHtml(s.summary || s.id.slice(0,8))}</div>
+            <div class="session-time">${s.message_count || 0} messages · ${new Date(s.created_at).toLocaleDateString()}</div>
+          </div>`).join('')
+        : '<div style="padding:20px;text-align:center;color:var(--text-muted)">No sessions yet</div>';
+      sessionList.querySelectorAll('.session-item').forEach(el => {
+        el.onclick = () => {
+          closeSidebar();
+          loadSession(el.dataset.id);
+        };
+      });
+    } catch {}
+  }
+
+  function escHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+  document.getElementById('sidebar-close').onclick = closeSidebar;
+  overlay.onclick = closeSidebar;
+
+  // Button: replace history-btn with sidebar toggle
+  document.getElementById('history-btn').onclick = toggleSidebar;
+})();
+
+// ═══════════════════════════════════════════════════════════════
+// Keyboard shortcuts
+// ═══════════════════════════════════════════════════════════════
+document.addEventListener('keydown', function(e) {
+  // Ctrl+Enter or Cmd+Enter: send message
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    const sendBtn = document.getElementById('send-btn');
+    if (!sendBtn.disabled) sendBtn.click();
+  }
+  // Ctrl+N: new chat
+  if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+    e.preventDefault();
+    document.getElementById('clear-btn').click();
+  }
+  // Ctrl+B: toggle sidebar
+  if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+    e.preventDefault();
+    document.getElementById('sidebar-close').click();
+    document.getElementById('sidebar').classList.add('open');
+    document.getElementById('sidebar-overlay').style.display = 'block';
+  }
+  // Escape: close panels
+  if (e.key === 'Escape') {
+    document.getElementById('sidebar-close').click();
+    document.getElementById('settings-close').click();
+    document.getElementById('close-history')?.click();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Metrics panel in settings
+// ═══════════════════════════════════════════════════════════════
+(function initMetrics() {
+  const panel = document.getElementById('metrics-panel');
+  const observer = new MutationObserver(() => {
+    if (document.getElementById('settings-panel').classList.contains('open')) loadMetrics();
+  });
+  observer.observe(document.getElementById('settings-panel'), { attributes: true, attributeFilter: ['class'] });
+
+  async function loadMetrics() {
+    try {
+      const resp = await fetch('/v1/metrics?minutes=60', { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!resp.ok) return;
+      const m = await resp.json();
+      if (m.total_requests === 0) {
+        panel.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-muted)">No requests yet</div>';
+        return;
+      }
+      const lat = m.latency_ms || {};
+      panel.innerHTML = `
+        <div class="metric-grid">
+          <div class="metric-card"><h4>Requests</h4><div class="metric-value">${m.total_requests}</div><div class="metric-sub">${m.requests_per_minute?.toFixed(1) || 0}/min</div></div>
+          <div class="metric-card"><h4>Error Rate</h4><div class="metric-value">${(m.error_rate * 100).toFixed(1)}%</div><div class="metric-sub">${m.cache_hit_rate ? `Cache: ${(m.cache_hit_rate * 100).toFixed(0)}%` : ''}</div></div>
+          <div class="metric-card"><h4>p50 Latency</h4><div class="metric-value">${lat.p50?.toFixed(0) || '—'}ms</div><div class="metric-sub">p95: ${lat.p95?.toFixed(0) || '—'}ms</div></div>
+          <div class="metric-card"><h4>Cache Hits</h4><div class="metric-value">${m.cache_hits || 0}</div><div class="metric-sub">of ${m.total_requests} requests</div></div>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-muted)">
+          Most used model: ${m.models ? Object.entries(m.models).sort((a,b) => b[1]-a[1])[0]?.[0] || '—' : '—'}
+        </div>`;
+    } catch { panel.innerHTML = '<div style="color:var(--text-muted)">Failed to load metrics</div>'; }
+  }
+})();
+
+function getToken() { return sessionStorage.getItem('token') || localStorage.getItem('token') || ''; }
 </script>
 </body>
 </html>
