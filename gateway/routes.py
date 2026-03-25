@@ -438,6 +438,19 @@ async def chat_completions(request: Request):
     except Exception:
         pass
 
+    # --- Record for adaptive routing ---
+    try:
+        from vault.adaptive_routing import get_adaptive_router
+        ar = get_adaptive_router()
+        ar.record_request(
+            model_name=model_name,
+            latency_ms=latency if endpoint_type != "local" else 0,
+            success=True,
+            confidence=route.get("confidence", 0.5),
+        )
+    except Exception:
+        pass
+
     # --- Store in semantic cache ---
     if getattr(settings, 'cache_enabled', True) and endpoint_type != "compare":
         from vault.semantic_cache import _get_cache
@@ -746,6 +759,15 @@ async def feedback(request: Request):
         return JSONResponse({"error": "interaction not found"}, status_code=404)
 
     reallog.update_feedback(interaction_id, fb, critique)
+
+    # Record for adaptive routing
+    if interaction:
+        try:
+            from vault.adaptive_routing import get_adaptive_router
+            ar = get_adaptive_router()
+            ar.record_feedback(interaction.get("target_model", ""), fb)
+        except Exception:
+            pass
 
     # Invalidate cache on negative feedback
     if fb == "down" and interaction:
@@ -1425,3 +1447,43 @@ async def config_validate(request: Request):
             warnings.append("local_max_tokens must be >= 1")
 
     return JSONResponse({"valid": len(warnings) == 0, "warnings": warnings})
+
+
+async def adaptive_dashboard(request: Request):
+    """GET /v1/adaptive/dashboard — model health, cost, calibration."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    from vault.adaptive_routing import get_adaptive_router
+    return JSONResponse(get_adaptive_router().get_dashboard())
+
+
+async def adaptive_health(request: Request):
+    """GET /v1/adaptive/health/{model_name} — health for a specific model."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    from vault.adaptive_routing import get_adaptive_router
+    model_name = request.path_params.get("model_name", "")
+    health = get_adaptive_router().get_model_health(model_name)
+    if health is None:
+        return JSONResponse({"error": f"no data for model: {model_name}"}, status_code=404)
+    return JSONResponse(health)
+
+
+async def adaptive_suggest(request: Request):
+    """GET /v1/adaptive/suggest — routing suggestion based on model health."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    s = get_settings()
+    from vault.adaptive_routing import get_adaptive_router
+    return JSONResponse(get_adaptive_router().suggest_model(
+        s.cheap_model_name, s.escalation_model_name
+    ))

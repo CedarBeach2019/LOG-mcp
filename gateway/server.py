@@ -23,6 +23,9 @@ from gateway.routes import (
     local_model_unload,
     local_models_list,
     metrics_dashboard,
+    adaptive_dashboard,
+    adaptive_health,
+    adaptive_suggest,
     preferences_delete,
     preferences_list,
     preferences_set,
@@ -88,6 +91,9 @@ routes = [
     Route("/v1/config", config_get, methods=["GET"]),
     Route("/v1/config", config_set, methods=["PUT"]),
     Route("/v1/config/validate", config_validate, methods=["POST"]),
+    Route("/v1/adaptive/dashboard", adaptive_dashboard, methods=["GET"]),
+    Route("/v1/adaptive/health/{model_name}", adaptive_health, methods=["GET"]),
+    Route("/v1/adaptive/suggest", adaptive_suggest, methods=["GET"]),
 ]
 
 
