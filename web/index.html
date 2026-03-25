@@ -124,6 +124,14 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .route-badge.deep{background:rgba(168,85,247,.12);color:#a855f7}
 .route-badge.compare{background:rgba(59,130,246,.12);color:#60a5fa}
 .route-badge.draft{background:rgba(255,170,50,.15);color:#ffaa32}
+.route-badge.cached{background:rgba(251,191,36,.15);color:#fbbf24}
+.route-badge.local{background:rgba(59,130,246,.15);color:#60a5fa}
+/* Local status indicator */
+.local-status{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;cursor:default}
+.local-status.active{background:rgba(68,221,136,.12);color:#44dd88}
+.local-status.inactive{background:rgba(255,68,102,.12);color:#ff4466}
+.cache-bar{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:6px}
+.cache-bar-fill{height:100%;background:#fbbf24;border-radius:3px;transition:width .3s}
 .route-meta{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-muted);margin-bottom:6px}
 .route-model{font-family:var(--mono);font-size:11px}
 .route-conf{opacity:.7}
@@ -243,6 +251,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   <div id="chat-header">
     <h1><span class="header-dot"></span>LOG-mcp</h1>
     <div class="header-actions">
+      <span class="local-status inactive" id="local-status-badge" title="Local model status">🔴 LOCAL</span>
       <button id="privacy-btn" class="hdr-btn privacy-on" title="Privacy mode">🔒</button>
       <button id="settings-btn" class="hdr-btn" title="Settings">⚙️</button>
       <button id="logout-btn">Sign out</button>
@@ -296,6 +305,23 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     <div class="sp-section"><h3>Preferences</h3>
       <div id="prefs-list"></div>
       <div id="prefs-empty" style="color:var(--text-muted);font-size:13px;display:none">No preferences learned yet. Use feedback (👍👎) to teach the system.</div>
+    </div>
+    <div class="sp-section"><h3>Local Model</h3>
+      <div id="local-model-info" style="font-size:13px;color:var(--text-muted);margin-bottom:10px">Loading…</div>
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <select id="local-model-select" style="flex:1;padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:var(--font);outline:none">
+          <option value="">Select a model…</option>
+        </select>
+        <button id="local-model-load-btn" style="padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;font-family:var(--font);white-space:nowrap">Load</button>
+      </div>
+      <button id="local-model-unload-btn" style="width:100%;padding:8px;background:rgba(255,68,102,.1);border:1px solid rgba(255,68,102,.3);color:var(--error);border-radius:8px;cursor:pointer;font-size:13px;font-family:var(--font);display:none">Unload Model</button>
+      <div id="gpu-mem-info" style="font-size:11px;color:var(--text-muted);margin-top:8px"></div>
+    </div>
+    <div class="sp-section"><h3>Cache</h3>
+      <div id="cache-stats" style="font-size:13px;color:var(--text-muted);margin-bottom:10px">Loading…</div>
+      <div class="cache-bar"><div class="cache-bar-fill" id="cache-hit-bar" style="width:0%"></div></div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px" id="cache-hit-label">Hit rate: 0%</div>
+      <button id="cache-clear-btn" style="width:100%;padding:8px;margin-top:10px;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);color:#fbbf24;border-radius:8px;cursor:pointer;font-size:13px;font-family:var(--font)">Clear Cache</button>
     </div>
     <div class="sp-section"><h3>Routing</h3><div id="routing-info"></div></div>
   </div>
@@ -691,8 +717,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       const content = data.choices?.[0]?.message?.content || '(empty response)';
       const route = data.route || {};
       const interactionId = data.interaction_id;
+      const cached = data.cached || false;
       statusEl.remove();
-      addAssistantMessage(content, route, interactionId);
+      addAssistantMessage(content, route, interactionId, cached);
       chatHistory.push({ role: 'assistant', content });
       if (data.escalation_response) {
         addMessage('assistant', data.escalation_response);
@@ -1050,7 +1077,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     return row;
   }
 
-  function addAssistantMessage(content, route, interactionId) {
+  function addAssistantMessage(content, route, interactionId, cached) {
     const row = document.createElement('div');
     row.className = 'msg-row assistant';
     if (interactionId != null) row.dataset.interactionId = interactionId;
@@ -1067,6 +1094,21 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       else if (route.action === 'COMPARE') { badge.classList.add('compare'); badge.textContent = '🔄 compare'; }
       else { badge.textContent = route.action; }
       metaWrap.appendChild(badge);
+
+      // Local model badge
+      if (route.local || route.source === 'local') {
+        const lb = document.createElement('span');
+        lb.className = 'route-badge local';
+        lb.textContent = '🔵 LOCAL';
+        metaWrap.appendChild(lb);
+      }
+      // Cache badge
+      if (cached) {
+        const cb = document.createElement('span');
+        cb.className = 'route-badge cached';
+        cb.textContent = '⚡ CACHED';
+        metaWrap.appendChild(cb);
+      }
 
       const metaDetails = document.createElement('div');
       metaDetails.className = 'route-meta';
@@ -1183,6 +1225,123 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     h = h.replace(/<p><\/p>/g, '');
     return h;
   }
+
+  // ── Local model & cache polling ──
+  let localModelName = '';
+
+  async function pollLocalStatus() {
+    try {
+      const r = await api('GET', '/v1/local/status');
+      if (!r.ok) { updateLocalUI(null); return; }
+      const data = await r.json();
+      updateLocalUI(data);
+    } catch { updateLocalUI(null); }
+  }
+
+  function updateLocalUI(data) {
+    const badge = document.getElementById('local-status-badge');
+    const info = document.getElementById('local-model-info');
+    const unloadBtn = document.getElementById('local-model-unload-btn');
+    const gpuInfo = document.getElementById('gpu-mem-info');
+
+    if (data && data.loaded && data.model) {
+      localModelName = data.model;
+      badge.className = 'local-status active';
+      badge.textContent = '🟢 LOCAL';
+      badge.title = 'Local model: ' + data.model;
+      const sizeStr = data.size ? ' · ' + data.size : '';
+      info.innerHTML = '<span style="color:var(--success)">● ' + esc(data.model) + sizeStr + '</span>';
+      unloadBtn.style.display = 'block';
+      if (data.gpu_memory_used || data.gpu_memory_total) {
+        gpuInfo.textContent = 'GPU: ' + (data.gpu_memory_used || '?') + ' / ' + (data.gpu_memory_total || '?');
+      }
+    } else {
+      localModelName = '';
+      badge.className = 'local-status inactive';
+      badge.textContent = '🔴 LOCAL';
+      badge.title = 'No local model loaded';
+      info.innerHTML = '<span style="color:var(--text-muted)">No local model loaded</span>';
+      unloadBtn.style.display = 'none';
+      gpuInfo.textContent = '';
+    }
+  }
+
+  async function loadLocalModels() {
+    const sel = document.getElementById('local-model-select');
+    try {
+      const r = await api('GET', '/v1/local/models');
+      if (!r.ok) return;
+      const data = await r.json();
+      const models = data.models || data || [];
+      sel.innerHTML = '<option value="">Select a model…</option>';
+      models.forEach(m => {
+        const name = typeof m === 'string' ? m : (m.name || m.id || '');
+        const size = typeof m === 'object' && m.size ? ' (' + m.size + ')' : '';
+        if (name) {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name + size;
+          sel.appendChild(opt);
+        }
+      });
+    } catch {}
+  }
+
+  document.getElementById('local-model-load-btn').addEventListener('click', async () => {
+    const model = document.getElementById('local-model-select').value;
+    if (!model) return;
+    const btn = document.getElementById('local-model-load-btn');
+    btn.textContent = 'Loading…';
+    btn.disabled = true;
+    try {
+      const r = await api('POST', '/v1/local/load', { model });
+      if (r.ok) await pollLocalStatus();
+      else alert('Failed to load model');
+    } catch { alert('Network error'); }
+    finally { btn.textContent = 'Load'; btn.disabled = false; }
+  });
+
+  document.getElementById('local-model-unload-btn').addEventListener('click', async () => {
+    try {
+      const r = await api('POST', '/v1/local/unload');
+      if (r.ok) await pollLocalStatus();
+    } catch {}
+  });
+
+  async function pollCacheStats() {
+    try {
+      const r = await api('GET', '/v1/cache/stats');
+      if (!r.ok) { document.getElementById('cache-stats').textContent = 'Unavailable'; return; }
+      const d = await r.json();
+      const hits = d.hits || 0, misses = d.misses || 0;
+      const rate = d.hit_rate || (hits + misses > 0 ? hits / (hits + misses) : 0);
+      document.getElementById('cache-stats').innerHTML =
+        '<span>Hits: <b style="color:var(--text)">' + hits + '</b></span> · ' +
+        '<span>Misses: <b style="color:var(--text)">' + misses + '</b></span> · ' +
+        '<span>Entries: <b style="color:var(--text)">' + (d.total_entries || 0) + '</b></span>';
+      document.getElementById('cache-hit-bar').style.width = (rate * 100).toFixed(1) + '%';
+      document.getElementById('cache-hit-label').textContent = 'Hit rate: ' + (rate * 100).toFixed(1) + '%';
+    } catch { document.getElementById('cache-stats').textContent = 'Unavailable'; }
+  }
+
+  document.getElementById('cache-clear-btn').addEventListener('click', async () => {
+    try {
+      const r = await api('POST', '/v1/cache/clear');
+      if (r.ok) { setTimeout(pollCacheStats, 300); }
+    } catch {}
+  });
+
+  // Extend openSettings to also load local/cache
+  const _origOpenSettings = openSettings;
+  openSettings = function() {
+    _origOpenSettings();
+    pollLocalStatus();
+    loadLocalModels();
+    pollCacheStats();
+  };
+
+  // Poll every 30 seconds
+  setInterval(() => { if (token) pollLocalStatus(); }, 30000);
 
   if (token) showChat();
   else els.passphrase.focus();
