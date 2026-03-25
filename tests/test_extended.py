@@ -96,7 +96,7 @@ class TestPIIDetection:
         cards = [e for e in entities if e.entity_type == "credit_card"]
         assert len(cards) == 1, f"Expected 1 credit card, got {len(cards)}"
         assert len(phones) == 0, f"Credit card matched as phone: {phones}"
-        assert "CC_1" in dehydrated, f"Expected CC_1 in dehydrated text, got: {dehydrated}"
+        assert "CREDIT_CARD_A" in dehydrated or "CC_A" in dehydrated, f"Expected CC token in dehydrated text, got: {dehydrated}"
         assert "PHONE" not in dehydrated, f"PHONE found in dehydrated text: {dehydrated}"
 
     def test_api_key(self, dehydrator):
@@ -173,8 +173,8 @@ class TestDehydrationRehydration:
         d2, _ = dehydrator.dehydrate(text2)
         # Same email should map to same entity ID
         import re
-        id1 = re.findall(r'<[A-Z]+_\d+>', d1)
-        id2 = re.findall(r'<[A-Z]+_\d+>', d2)
+        id1 = re.findall(r'\[[A-Z]+_[A-Z]\]', d1)
+        id2 = re.findall(r'\[[A-Z]+_[A-Z]\]', d2)
         assert len(id1) == 1 and len(id2) == 1
         assert id1[0] == id2[0]
 
@@ -200,8 +200,8 @@ class TestCrossSession:
 
         # Same entity ID should be used
         import re
-        id1 = re.findall(r'<[A-Z]+_\d+>', d1)
-        id2 = re.findall(r'<[A-Z]+_\d+>', d2)
+        id1 = re.findall(r'\[[A-Z]+_[A-Z]\]', d1)
+        id2 = re.findall(r'\[[A-Z]+_[A-Z]\]', d2)
         assert id1[0] == id2[0]
 
         # Rehydrate from session 2 data

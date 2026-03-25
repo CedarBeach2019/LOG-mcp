@@ -72,7 +72,7 @@ class TestDehydrationRehydration:
         # If entities were detected, check replacements
         if len(entities) > 0:
             # Dehydrated text should not contain original PII
-            # Note: The placeholder format is <ENTITY_X>, not LOG_ID
+            # Note: The placeholder format is [TYPE_X], e.g., [EMAIL_A], [PERSON_B]
             # So check for angle brackets
             if '<' in dehydrated and '>' in dehydrated:
                 # Placeholders found, so original PII should not be present
@@ -94,7 +94,7 @@ class TestDehydrationRehydration:
         dehydrated, entities = dehydrator.dehydrate(original)
         
         # Only test rehydration if entities were actually detected and replaced
-        if len(entities) > 0 and '<' in dehydrated and '>' in dehydrated:
+        if len(entities) > 0 and '[' in dehydrated and ']' in dehydrated:
             rehydrated = rehydrator.rehydrate(dehydrated)
             # Rehydrated text should match original
             assert rehydrated == original
@@ -166,8 +166,8 @@ class TestDehydrationRehydration:
         
         # Extract entity IDs from dehydrated text (format: <TYPE_N>)
         import re
-        ids1 = re.findall(r'<[A-Z]+_\d+>', dehydrated1)
-        ids2 = re.findall(r'<[A-Z]+_\d+>', dehydrated2)
+        ids1 = re.findall(r'\[[A-Z]+_[A-Z]\]', dehydrated1)
+        ids2 = re.findall(r'\[[A-Z]+_[A-Z]\]', dehydrated2)
         
         # Both should have at least one entity ID
         assert len(ids1) > 0
