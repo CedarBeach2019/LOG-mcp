@@ -1,153 +1,130 @@
 <!-- Badges -->
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![MIT License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-52%20passing-brightgreen)
-[![Deployed](https://img.shields.io/badge/live-Cloudflare%20Workers-orange)](https://log-mcp-vault.magnus-digennaro.workers.dev/)
+![Tests](https://img.shields.io/badge/tests-108%20passing-brightgreen)
+![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker)
+[![Cloudflare Workers](https://img.shields.io/badge/live-Cloudflare%20Workers-F38020?logo=cloudflare)](https://log-mcp-vault.magnus-digennaro.workers.dev/)
 
-# 🔒 LOG-mcp — Your PII never touches an AI server.
+# LOG-mcp
 
-Privacy middleware that strips every trace of personal data from your messages *before* they reach any AI API. No trust required.
+**Your personal AI gateway.** Route every prompt to the right model, strip PII before it leaves your machine, compare draft responses side-by-side, and learn what you prefer — all self-hosted, all yours.
 
+```text
+You ask a question. LOG-mcp sends it to three models simultaneously:
+
+  🎯 precise (deepseek-chat, temp=0.2):
+  "Photosynthesis converts light energy into glucose."
+
+  💡 creative (deepseek-chat, temp=0.7):
+  "Plants are solar kitchens — they bake sugar from sunlight."
+
+  🧠 deep (deepseek-reasoner, temp=0.1):
+  "Chlorophyll absorbs blue/red photons, exciting electrons that drive
+   the Calvin cycle to fix CO₂ into C₆H₁₂O₆."
+
+  Pick the one you like. 👍👎 teaches the router next time.
 ```
-$ log dehydrate "Patient John Smith (DOB 1985-03-12) called from 555-123-4567"
-
-  Dehydrated: "Patient ENTITY_1 (DOB [DOB]) called from PHONE_1"
-  Rehydrate key: session_abc123
-
-  → Send "Patient ENTITY_1 (DOB [DOB]) called from PHONE_1" to any AI.
-  → The AI never sees John Smith, his birthday, or his phone number.
-```
-
-👉 **[Try it live](https://log-mcp-vault.magnus-digennaro.workers.dev/)** — hit the deployed Cloudflare Worker right now.
-
----
-
-## Why this matters
-
-| Scenario | Risk without LOG-mcp |
-|---|---|
-| **Healthcare** — Sending patient notes to an LLM for summarization | HIPAA violation. Real names, SSNs, and diagnoses leak to OpenAI/Anthropic servers. |
-| **Legal** — Running attorney-client memos through AI for research | Attorney-client privilege destroyed. Case details stored in third-party training data. |
-| **Finance** — Automating fraud analysis on transaction logs | PCI-DSS breach. Credit card numbers and account holders exposed to AI providers. |
-| **Multi-agent** — Agents passing user context to sub-agents | Each hop is a potential PII leak. Every endpoint is an attack surface. |
-
-LOG-mcp catches all of it *at the gateway*, before data leaves your infrastructure.
 
 ---
 
 ## Architecture
 
 ```
- ┌──────────┐      ┌──────────────┐      ┌───────────┐
- │  Your     │      │  LOG-mcp     │      │  AI API   │
- │  App /    │─────▶│  Gateway     │─────▶│           │
- │  Agent    │      │              │      │  Claude   │
- └──────────┘      │  dehydrate() │      │  GPT      │
-                    │  → strip PII │      │  Gemini   │
- ┌──────────┐      │  → store map │      │  Llama    │
- │  Local    │◀─────│  rehydrate() │◀─────│           │
- │  Vault    │      │  → restore   │      └───────────┘
- │  (SQLite) │      │              │
- └──────────┘      └──────────────┘
+ ┌──────────────┐     ┌───────────────────────────────────┐     ┌──────────────┐
+ │              │     │  LOG-mcp Gateway                   │     │              │
+ │   Your App   │────▶│  ┌─────────┐  ┌───────────────┐  │────▶│  Cloud APIs  │
+ │   / Agent    │     │  │ PII      │  │ Rule Router   │  │     │  DeepSeek    │
+ │              │     │  │ Engine   │──│ (~5ms regex)  │  │     │  Claude      │
+ │              │◀────│  └─────────┘  └──────┬────────┘  │◀────│  GPT         │
+ └──────────────┘     │                      │            │     │  Ollama      │
+                      │  ┌───────────────────▼────────┐  │     └──────────────┘
+                      │  │   Draft Round               │  │
+                      │  │   precise │ creative │ deep  │  │
+                      │  │   → fire all → pick best    │  │
+                      │  └────────────────────────────┘  │
+                      │  ┌────────────────────────────┐  │
+                      │  │   Local Vault (SQLite)      │  │
+                      │  │   preferences · feedback    │  │
+                      │  │   interactions · entities   │  │
+                      │  └────────────────────────────┘  │
+                      └───────────────────────────────────┘
 ```
 
-Your data flows: **App → Gateway → AI** (anonymized). **AI → Gateway → App** (rehydrated). The AI only ever sees tokens like `ENTITY_1` and `PHONE_3`.
+**Message flow:** PII stripped → router classifies → draft round fires → response rehydrated. The AI never sees your data. You see the best answer.
 
 ---
 
-## Quick Install
+## What It Does
 
+### Intelligent Routing
+Every message is classified in ~5ms using pattern matching. Simple questions ("what is 5km in miles?") go to the fast/cheap model. Complex ones ("debug my traceback" or "write an essay about…") escalate to a reasoning model. You can override with `/local`, `/cloud`, `/reason`, or `/draft`.
+
+### Draft Round
+For any request, fire multiple model profiles in parallel — each with different temperatures and system prompts. Pick the response that fits, or let the router learn from your choice over time.
+
+### Privacy by Default
+PII (names, emails, phones, SSNs, credit cards, API keys, addresses) is detected and replaced with tokens *before* any cloud API call. The mapping lives only in your local SQLite vault. Cloud providers never see your real data.
+
+### Preference Learning
+Every interaction is stored. Your 👍/👎 feedback and text critiques feed back into routing decisions. The system gets better at choosing the right model for *you* specifically — not some averaged user.
+
+### OpenAI-Compatible API
+Drop it in as a replacement for any OpenAI SDK. Same `/v1/chat/completions` endpoint, same response format. Works with Claude, GPT, DeepSeek, Ollama — whatever you configure.
+
+---
+
+## Quick Start
+
+**Docker (recommended):**
 ```bash
 git clone https://github.com/CedarBeach2019/LOG-mcp.git
 cd LOG-mcp
-pip install -e .
+docker compose up
 ```
 
-That's it. You're ready.
+That's it. The gateway is running on `http://localhost:8000`.
 
-```bash
-$ log dehydrate "Call Jane Doe at jane@example.com or 212-555-0147"
-Dehydrated: "Call ENTITY_1 at EMAIL_1 or PHONE_1"
-Session: sess_7f3a2c
-```
-
----
-
-## Deployment Modes
-
-| Mode | Best for | Cost | Latency |
-|---|---|---|---|
-| **[Local](#local)** | Development, privacy-critical workloads | Free | Lowest |
-| **[Cloudflare Workers](#cloudflare-workers)** | Production, serverless, global edge | Free tier | ~50ms |
-| **[Docker](#docker)** | Self-hosted, air-gapped, on-prem | Infrastructure only | Network-dependent |
-
-### Local
-
+**Manual install:**
 ```bash
 pip install -e ".[full]"
-log init              # create vault at ~/.log/vault/
-log dehydrate "Your text here"
+log init
 ```
 
-### Cloudflare Workers
-
-Free tier includes 100k requests/day, D1 database, and KV cache.
-
+**Point your app at it:**
 ```bash
-cd cloudflare
-npm install
-npx wrangler login
-npx wrangler deploy
-```
-
-Endpoints: `/dehydrate`, `/rehydrate`, `/stats`, `/health`
-
-Live demo: [https://log-mcp-vault.magnus-digennaro.workers.dev/](https://log-mcp-vault.magnus-digennaro.workers.dev/)
-
-### Docker
-
-```bash
-docker build -t log-mcp .
-docker run -p 8000:8000 -v log-vault:/data log-mcp
+export OPENAI_BASE_URL=http://localhost:8000/v1
+export OPENAI_API_KEY=your-deepseek-key
 ```
 
 ---
 
-## PII Detection
+## Deployment
 
-LOG-mcp identifies and replaces these entity types:
-
-| Entity | Example Input | Anonymized Output |
+| Mode | Setup | Best For |
 |---|---|---|
-| Emails | `user@example.com` | `EMAIL_1` |
-| Phone numbers | `+1 (555) 123-4567` | `PHONE_1` |
-| SSNs | `123-45-6789` | `SSN_1` |
-| Credit cards | `4532-1234-5678-9010` | `CC_1` |
-| Names (English) | `Jane Marie Smith` | `ENTITY_1` |
-| Addresses | `123 Main St, Springfield IL` | `ADDR_1` |
-| Dates of birth | `1985-03-12` | `[DOB]` |
-| Passport numbers | `US12345678` | `PASSPORT_1` |
-| API keys | `sk-proj-abc123...` | `KEY_1` |
-| Non-ASCII PII | Cyrillic/CJK names & data | Redacted |
+| **Docker** | `docker compose up` | Self-hosted, air-gapped, one command |
+| **Cloudflare Workers** | `cd cloudflare && npx wrangler deploy` | Global edge, free tier (100k req/day) |
+| **Local** | `pip install -e .` | Development, scripting |
+
+See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough.
 
 ---
 
-## CLI Reference
+## CLI
 
-| Command | Description |
-|---|---|
-| `log dehydrate "<text>"` | Strip PII, return anonymized text + session key |
-| `log rehydrate <session-id>` | Restore original text from vault |
-| `log init` | Initialize local vault (`~/.log/vault/`) |
-| `log stats` | Show vault statistics (sessions, entities, storage) |
-| `log scout <provider> "<text>"` | Dehydrate → send to AI → rehydrate response |
-| `log archive <session-id>` | Archive a session to long-term storage |
+```bash
+log dehydrate "Call Jane Doe at jane@example.com"   # Strip PII
+log scout deepseek "What is photosynthesis?"         # Route + respond
+log draft "Explain quantum computing"                 # Draft round: 3 models
+log stats                                            # Vault stats
+log rehydrate <session-id>                           # Restore original text
+```
 
 ---
 
-## MCP Integration
+## MCP Server
 
-Use LOG-mcp as an [MCP](https://modelcontextprotocol.io/) server:
+Use as a [Model Context Protocol](https://modelcontextprotocol.io/) server:
 
 ```json
 {
@@ -161,21 +138,53 @@ Use LOG-mcp as an [MCP](https://modelcontextprotocol.io/) server:
 }
 ```
 
-Tools exposed: `dehydrate`, `rehydrate`, `stats`, `list_sessions`.
+Tools: `dehydrate`, `rehydrate`, `stats`, `list_sessions`, `draft`, `feedback`.
+
+---
+
+## For Developers
+
+### Adding a Provider
+
+Edit `vault/config.py` — add a new `cheap_model_endpoint` / `escalation_model_endpoint` pointing to any OpenAI-compatible API. That's it. The draft round and router will use it.
+
+### Custom Routing
+
+Edit `vault/routing_script.py`. The `RULES` dict maps regex patterns to routing actions (`CHEAP_ONLY`, `ESCALATE`). Add patterns for your domain:
+
+```python
+"ESCALATE": {
+    "patterns": [
+        r"my (legal|medical|financial)\b",  # your custom rule
+        # ...
+    ]
+}
+```
+
+### Draft Profiles
+
+Edit `vault/draft_profiles.py` to change the parallel draft personas (temperature, system prompt, model, max length).
+
+### Configuration
+
+All settings via `LOG_` environment variables. See `vault/config.py` for the full list. Key ones:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LOG_privacy_mode` | `true` | PII-strip before any cloud call |
+| `LOG_instant_send` | `true` | Fire cheap model immediately |
+| `LOG_draft_mode` | `true` | Enable draft round |
+| `LOG_cheap_model_name` | `deepseek-chat` | Fast model |
+| `LOG_escalation_model_name` | `deepseek-reasoner` | Reasoning model |
+| `LOG_ollama_base_url` | `http://localhost:11434` | Local LLM |
 
 ---
 
 ## Testing
 
 ```bash
-# Unit tests (52 tests)
-pytest tests/ -v
-
-# E2e scenario suite (46 checks: HIPAA, legal, financial, multi-agent)
-pytest tests/demo_e2e.py -v
-
-# With coverage
-pytest --cov=vault --cov=mcp --cov=scouts
+pytest tests/ -v                    # 108 tests
+pytest --cov=vault --cov=gateway    # With coverage
 ```
 
 ---
@@ -184,13 +193,15 @@ pytest --cov=vault --cov=mcp --cov=scouts
 
 | | |
 |---|---|
-| 🚀 **[Quickstart Guide](QUICKSTART.md)** | Get running in 5 minutes |
-| 🗺️ **[Roadmap](ROADMAP.md)** | What's coming next |
-| 🤝 **[Contributing](CONTRIBUTING.md)** | Join the project |
-| 📄 **[License](LICENSE)** | MIT |
+| 🚀 [Quickstart Guide](QUICKSTART.md) | Up and running in 5 minutes |
+| 🗺️ [Roadmap](ROADMAP.md) | What's coming next |
+| 🤝 [Contributing](CONTRIBUTING.md) | How to contribute |
+| 📐 [Architecture](docs/ARCHITECTURE.md) | Technical deep dive |
+| 🔮 [Vision](docs/VISION.md) | Where this is heading |
+| 📄 [License](LICENSE) | MIT |
 
 ---
 
 ## License
 
-MIT — use it however you want. Star the repo if it saves you from a compliance headache.
+MIT — fork it, modify it, run it however you want. Your gateway, your rules.

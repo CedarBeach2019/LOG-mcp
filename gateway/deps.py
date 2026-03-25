@@ -20,4 +20,5 @@ def get_reallog() -> RealLog:
     global _reallog
     if _reallog is None:
         _reallog = RealLog(settings=get_settings())
+        _reallog._seed_default_preferences()
     return _reallog
