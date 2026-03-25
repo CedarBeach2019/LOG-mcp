@@ -782,7 +782,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
             } catch {}
           }
         }
-        msgEl.querySelector('.msg-content').textContent = fullContent;
+        msgEl.querySelector('.msg-content').innerHTML = fmtMd(fullContent);
         chatHistory.push({ role: 'assistant', content: fullContent });
         statusEl.remove();
       } else {
@@ -1173,8 +1173,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 
       const badge = document.createElement('span');
       badge.className = 'route-badge';
-      if (route.action === 'CHEAP_ONLY') { badge.classList.add('fast'); badge.textContent = '⚡ fast'; }
-      else if (route.action === 'ESCALATE') { badge.classList.add('deep'); badge.textContent = '🧠 deep'; }
+      if (route.action === 'CHEAP_ONLY' || route.action === 'cheap') { badge.classList.add('fast'); badge.textContent = '⚡ fast'; }
+      else if (route.action === 'ESCALATE' || route.action === 'escalation') { badge.classList.add('deep'); badge.textContent = '🧠 deep'; }
       else if (route.action === 'COMPARE') { badge.classList.add('compare'); badge.textContent = '🔄 compare'; }
       else { badge.textContent = route.action; }
       metaWrap.appendChild(badge);
