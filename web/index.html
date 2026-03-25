@@ -653,6 +653,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       sessionStorage.setItem('token', t);
       token = t;
       showChat();
+      restoreLastSession();
     } catch (e) {
       els.loginError.textContent = e.message;
     } finally {
@@ -707,16 +708,19 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     scrollDown();
 
     try {
+      let body = { model: 'default', messages: chatHistory };
+      if (currentSessionId) body.session_id = currentSessionId;
       const r = await fetch(API + '/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ model: 'default', messages: chatHistory })
+        body: JSON.stringify(body)
       });
       if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || 'Error ' + r.status); }
       const data = await r.json();
       const content = data.choices?.[0]?.message?.content || '(empty response)';
       const route = data.route || {};
       const interactionId = data.interaction_id;
+      if (data.session_id) { currentSessionId = data.session_id; sessionStorage.setItem('session_id', currentSessionId); }
       const cached = data.cached || false;
       statusEl.remove();
       addAssistantMessage(content, route, interactionId, cached);
@@ -1343,7 +1347,52 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   // Poll every 30 seconds
   setInterval(() => { if (token) pollLocalStatus(); }, 30000);
 
-  if (token) showChat();
+  // --- Session persistence ---
+  let currentSessionId = sessionStorage.getItem('session_id') || '';
+
+  async function restoreLastSession() {
+    try {
+      const r = await api('GET', '/v1/sessions?limit=1');
+      if (!r.sessions || r.sessions.length === 0) return;
+      const sess = r.sessions[0];
+      const detail = await api('GET', `/v1/sessions/${sess.id}`);
+      if (!detail.messages || detail.messages.length === 0) return;
+      currentSessionId = sess.id;
+      sessionStorage.setItem('session_id', currentSessionId);
+      // Restore messages to UI (skip if messages already shown)
+      if (els.chatBox.children.length > 0) return;
+      for (const msg of detail.messages) {
+        if (msg.role === 'user') appendUser(msg.content, false);
+        else if (msg.role === 'assistant') appendAssistant(msg.content, false);
+      }
+      scrollToBottom();
+    } catch { /* silently fail — session restore is a nice-to-have */ }
+  }
+
+  // --- Session persistence ---
+  let currentSessionId = sessionStorage.getItem('session_id') || '';
+
+  async function restoreLastSession() {
+    try {
+      const r = await api('GET', '/v1/sessions?limit=1');
+      if (!r.sessions || r.sessions.length === 0) return;
+      const sess = r.sessions[0];
+      const detail = await api('GET', '/v1/sessions/' + encodeURIComponent(sess.id));
+      if (!detail.messages || detail.messages.length === 0) return;
+      currentSessionId = sess.id;
+      sessionStorage.setItem('session_id', currentSessionId);
+      if (chatHistory.length > 0) return;
+      for (const msg of detail.messages) {
+        chatHistory.push({ role: msg.role, content: msg.content });
+        if (msg.role === 'user') addMessage('user', msg.content);
+        else if (msg.role === 'assistant') addMessage('assistant', msg.content);
+      }
+      scrollDown();
+    } catch {}
+  }
+
+  if (token) { showChat(); restoreLastSession(); }
+  else els.passphrase.focus();
   else els.passphrase.focus();
 })();
 </script>
