@@ -50,7 +50,7 @@ class TestPIIProtection:
         resp = client.post("/auth/login", json={"passphrase": "testpass"})
         return resp.json()["token"]
 
-    @patch("gateway.routes.httpx.AsyncClient")
+    @patch("gateway.shared.httpx.AsyncClient")
     def test_no_pii_in_upstream_request(self, mock_client_cls, client):
         """PII in user message must be stripped before forwarding to upstream."""
         mock_response = MagicMock()
@@ -90,7 +90,7 @@ class TestPIIProtection:
         assert "[EMAIL_" in all_text or "[EMAIL_A]" in all_text
         assert "[SSN_" in all_text or "[SSN_A]" in all_text
 
-    @patch("gateway.routes.httpx.AsyncClient")
+    @patch("gateway.shared.httpx.AsyncClient")
     def test_rehydration_restores_pii(self, mock_client_cls, client):
         """Response from upstream should have PII restored."""
         mock_response = MagicMock()

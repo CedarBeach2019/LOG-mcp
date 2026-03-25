@@ -40,7 +40,7 @@ class TestDraftsEndpoint:
         resp = client.post("/v1/drafts", json={})
         assert resp.status_code == 401
 
-    @patch("gateway.routes.httpx.AsyncClient")
+    @patch("gateway.shared.httpx.AsyncClient")
     def test_drafts_returns_responses(self, mock_client_cls, client):
         """Drafts should return profile results even with mocked upstream."""
         mock_response = MagicMock()
@@ -74,7 +74,7 @@ class TestElaborateEndpoint:
         resp = client.post("/v1/elaborate", json={})
         assert resp.status_code == 401
 
-    @patch("gateway.routes.httpx.AsyncClient")
+    @patch("gateway.shared.httpx.AsyncClient")
     def test_elaborate_returns_full_response(self, mock_client_cls, client):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -104,7 +104,7 @@ class TestElaborateEndpoint:
         assert "choices" in data
         assert "Full detailed response" in data["choices"][0]["message"]["content"]
 
-    @patch("gateway.routes.httpx.AsyncClient")
+    @patch("gateway.shared.httpx.AsyncClient")
     def test_elaborate_includes_ranking_context(self, mock_client_cls, client):
         """Winner should receive context about other drafts."""
         captured_json = {}

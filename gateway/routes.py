@@ -1,109 +1,136 @@
-"""Starlette route handlers for the LOG-mcp gateway — Phase 2."""
+"""LOG-mcp route handlers — split into focused modules.
+
+This file remains the entry point; server.py imports from here.
+All handlers delegate to gateway/api_*.py modules.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import time
 from pathlib import Path
 
-import httpx
 from starlette.requests import Request
-from starlette.responses import JSONResponse, HTMLResponse
+from starlette.responses import HTMLResponse
 
-from gateway.auth import create_token, get_jwt_secret, verify_token
-
-# Shared httpx client — reuses TCP connections across requests (major latency win)
-_shared_client: httpx.AsyncClient | None = None
-
-def _get_client() -> httpx.AsyncClient:
-    global _shared_client
-    if _shared_client is None or _shared_client.is_closed:
-        _shared_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=10.0),
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
-    return _shared_client
+from gateway.shared import authenticate, call_model, get_client, get_local_manager
 from gateway.deps import get_reallog, get_settings
 from vault.core import Dehydrator, Rehydrator
 from vault.draft_profiles import get_draft_profiles
-from vault.profiles import ProfileManager
 from vault.routing_script import classify, resolve_action
 
 logger = logging.getLogger("gateway.routes")
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
-def _authenticate(request: Request) -> JSONResponse | None:
-    """Check JWT auth. Returns error response or None if valid."""
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return JSONResponse({"error": "missing token"}, status_code=401)
-    token = auth[7:]
-    reallog = get_reallog()
-    secret = get_jwt_secret(reallog)
-    payload = verify_token(token, secret)
-    if payload is None:
-        return JSONResponse({"error": "invalid or expired token"}, status_code=401)
-    return None
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
 
-
-async def serve_index(request: Request) -> HTMLResponse:
-    """GET / — serve the chat UI."""
-    return HTMLResponse(
-        open(WEB_DIR / "index.html").read(),
-    )
-
-
-async def login(request: Request) -> JSONResponse:
+async def login(request: Request):
     """POST /auth/login — exchange passphrase for JWT."""
+    from gateway.auth import create_token, get_jwt_secret
     try:
         body = await request.json()
     except Exception:
+        from starlette.responses import JSONResponse
         return JSONResponse({"error": "invalid json"}, status_code=400)
 
     passphrase = body.get("passphrase", "")
     settings = get_settings()
     if passphrase != settings.passphrase:
+        from starlette.responses import JSONResponse
         return JSONResponse({"error": "invalid passphrase"}, status_code=401)
 
     reallog = get_reallog()
     secret = get_jwt_secret(reallog)
     token = create_token(secret)
+    from starlette.responses import JSONResponse
     return JSONResponse({"token": token})
 
 
-async def _call_model(endpoint: str, api_key: str, model: str,
-                      messages: list[dict], timeout: float = 60.0,
-                      temperature: float | None = None) -> tuple[int, dict | None, str]:
-    """Call an OpenAI-compatible API. Returns (status_code, json_data, error_str)."""
+# ---------------------------------------------------------------------------
+# Static
+# ---------------------------------------------------------------------------
+
+async def serve_index(request: Request) -> HTMLResponse:
+    """GET / — serve the chat UI."""
+    return HTMLResponse(open(WEB_DIR / "index.html").read())
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
+async def health(request: Request):
+    """GET /v1/health — check service availability."""
+    from starlette.responses import JSONResponse
+    settings = get_settings()
+    results = {}
+
+    # Check cheap model
     try:
-        body = {"model": model, "messages": messages}
-        if temperature is not None:
-            body["temperature"] = temperature
-        client = _get_client()
-        resp = await client.post(
-            endpoint,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=timeout,
+        client = get_client()
+        resp = await client.get(
+            settings.cheap_model_endpoint.rsplit("/chat/completions", 1)[0].rsplit("/v1", 1)[0]
+            or settings.cheap_model_endpoint,
+            timeout=3.0,
         )
-        if resp.status_code != 200:
-            return resp.status_code, None, f"upstream returned {resp.status_code}"
-        return 200, resp.json(), ""
-    except httpx.TimeoutException:
-        return 0, None, "upstream timeout"
-    except httpx.HTTPError as exc:
-        return 0, None, f"upstream connection failed: {exc}"
+        results["cheap"] = True
+    except Exception:
+        results["cheap"] = False
+
+    # Check Ollama
+    try:
+        client = get_client()
+        resp = await client.get(f"{settings.ollama_base_url}/api/tags", timeout=2.0)
+        results["ollama"] = resp.status_code == 200
+    except Exception:
+        results["ollama"] = False
+
+    # Check local llama.cpp model
+    try:
+        info = get_local_manager().get_loaded_model_info()
+        results["local_model"] = info is not None
+        if info:
+            results["local_model_name"] = info.get("model_name", "unknown")
+    except Exception:
+        results["local_model"] = False
+
+    return JSONResponse(results)
 
 
-async def chat_completions(request: Request) -> JSONResponse:
+# ---------------------------------------------------------------------------
+# Chat completions
+# ---------------------------------------------------------------------------
+
+async def _call_draft_profile(settings, api_key: str, profile: dict, messages: list[dict]) -> dict:
+    """Call a single draft profile. Returns result dict (never raises)."""
+    t0 = time.time()
+    name = profile["name"]
+    if "endpoint" in profile and "model" in profile:
+        endpoint, model = profile["endpoint"], profile["model"]
+    else:
+        endpoint = getattr(settings, profile.get("endpoint_key", ""), "")
+        model = getattr(settings, profile.get("model_key", ""), "")
+    system_msg = {"role": "system", "content": profile.get("system_prompt", profile.get("system", ""))}
+
+    status, data, err = await call_model(endpoint, api_key, model, [system_msg] + messages,
+                                          temperature=profile.get("temperature"))
+    latency = int((time.time() - t0) * 1000)
+
+    if status == 200 and data and "choices" in data:
+        content = data["choices"][0]["message"]["content"]
+        return {"profile": name, "response": content, "model": model, "latency_ms": latency, "error": None}
+    return {"profile": name, "response": None, "model": model, "latency_ms": latency,
+            "error": err or f"upstream {status}"}
+
+
+async def chat_completions(request: Request):
     """POST /v1/chat/completions — dehydrate, route, call model(s), rehydrate."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
 
@@ -147,7 +174,6 @@ async def chat_completions(request: Request) -> JSONResponse:
         route["action"], settings.cheap_model_name, settings.escalation_model_name
     )
 
-    # Override endpoint based on type
     if endpoint_type == "cheap" or endpoint_type == "escalation":
         endpoint = (settings.cheap_model_endpoint if endpoint_type == "cheap"
                     else settings.escalation_model_endpoint)
@@ -155,12 +181,11 @@ async def chat_completions(request: Request) -> JSONResponse:
         endpoint = settings.cheap_model_endpoint
 
     # --- Semantic cache check ---
-    if getattr(settings, 'cache_enabled', True) and endpoint_type != "compare" and endpoint_type != "draft":
+    if getattr(settings, 'cache_enabled', True) and endpoint_type not in ("compare", "draft"):
         from vault.semantic_cache import _get_cache
         embed_fn = None
         try:
-            mgr = _get_local_manager()
-            backend = mgr.get_backend()
+            backend = get_local_manager().get_backend()
             if backend and backend.is_loaded:
                 embed_fn = backend.embed
         except Exception:
@@ -172,10 +197,8 @@ async def chat_completions(request: Request) -> JSONResponse:
                 latency = int((time.time() - t0) * 1000)
                 cache_iid = reallog.add_interaction(
                     session_id="cache_" + str(int(time.time())),
-                    user_input=user_content,
-                    route_action="CACHE_HIT",
-                    target_model=model_name,
-                    response=cached["response"],
+                    user_input=user_content, route_action="CACHE_HIT",
+                    target_model=model_name, response=cached["response"],
                     response_latency_ms=latency,
                 )
                 return JSONResponse({
@@ -183,8 +206,7 @@ async def chat_completions(request: Request) -> JSONResponse:
                     "choices": [{"message": {"role": "assistant", "content": cached["response"]}}],
                     "model": model_name,
                     "route": {"action": "cache_hit", "confidence": 1.0, "badge": "⚡ CACHED"},
-                    "cached": True,
-                    "latency_ms": latency,
+                    "cached": True, "latency_ms": latency,
                 })
 
     # Build system message with preferences
@@ -203,26 +225,20 @@ async def chat_completions(request: Request) -> JSONResponse:
     escalation_latency = None
 
     if endpoint_type == "local":
-        # Use local llama.cpp model
-        local_mgr = _get_local_manager()
-        backend = local_mgr.get_backend()
+        backend = get_local_manager().get_backend()
         if backend is None or not backend.is_loaded:
-            # Fallback to cloud cheap model
             logger.warning("Local model not loaded, falling back to cloud")
             endpoint_type = "cheap"
             endpoint = settings.cheap_model_endpoint
             model_name = settings.cheap_model_name
         else:
             local_content = await backend.agenerate(
-                upstream_messages,
-                temperature=0.7,
+                upstream_messages, temperature=0.7,
                 max_tokens=getattr(settings, 'local_max_tokens', 512),
             )
             latency = int((time.time() - t0) * 1000)
             if local_content:
-                # Rehydrate
                 rehydrated = rehydrator.rehydrate(local_content)
-                # Store interaction
                 reallog.store_interaction(
                     user_input=user_content, model_response=local_content,
                     model_name="local", route_action="LOCAL", latency_ms=latency,
@@ -235,20 +251,14 @@ async def chat_completions(request: Request) -> JSONResponse:
                     "latency_ms": latency,
                 })
             else:
-                # Local failed, fallback to cloud
                 logger.warning("Local inference failed, falling back to cloud")
                 endpoint_type = "cheap"
 
     if endpoint_type == "compare":
-        # Fire both in parallel
-        cheap_status, cheap_data, cheap_err = await _call_model(
-            settings.cheap_model_endpoint, api_key, settings.cheap_model_name,
-            upstream_messages
-        )
-        esc_status, esc_data, esc_err = await _call_model(
-            settings.escalation_model_endpoint, api_key, settings.escalation_model_name,
-            upstream_messages
-        )
+        cheap_status, cheap_data, cheap_err = await call_model(
+            settings.cheap_model_endpoint, api_key, settings.cheap_model_name, upstream_messages)
+        esc_status, esc_data, esc_err = await call_model(
+            settings.escalation_model_endpoint, api_key, settings.escalation_model_name, upstream_messages)
         cheap_latency = int((time.time() - t0) * 1000)
 
         if cheap_status == 200 and cheap_data:
@@ -261,13 +271,10 @@ async def chat_completions(request: Request) -> JSONResponse:
             escalation_response = esc_data["choices"][0]["message"]["content"]
             escalation_latency = int((time.time() - t0) * 1000)
     else:
-        # Single model call
-        status, data, err = await _call_model(endpoint, api_key, model_name, upstream_messages)
+        status, data, err = await call_model(endpoint, api_key, model_name, upstream_messages)
         latency = int((time.time() - t0) * 1000)
-
         if status != 200 or data is None:
             return JSONResponse({"error": err or "unknown error"}, status_code=502)
-
         response_text = data["choices"][0]["message"]["content"]
         route["target_model"] = model_name
         route["response_latency_ms"] = latency
@@ -280,13 +287,10 @@ async def chat_completions(request: Request) -> JSONResponse:
     # --- Store interaction ---
     session_id = "session_" + str(int(time.time()))
     interaction_id = reallog.add_interaction(
-        session_id=session_id,
-        user_input=user_content,
-        route_action=route["action"],
-        route_reason=route.get("reason", ""),
+        session_id=session_id, user_input=user_content,
+        route_action=route["action"], route_reason=route.get("reason", ""),
         target_model=route.get("target_model", model_name),
-        response=response_text,
-        escalation_response=escalation_response,
+        response=response_text, escalation_response=escalation_response,
         response_latency_ms=route.get("response_latency_ms", int((time.time() - t0) * 1000)),
         escalation_latency_ms=escalation_latency,
     )
@@ -298,12 +302,10 @@ async def chat_completions(request: Request) -> JSONResponse:
         if cache and response_text:
             cache.put(user_content, model_name, response_text)
 
-    # --- Build response ---
     result = {
         "choices": [{"message": {"role": "assistant", "content": response_text}}],
         "route": {
-            "action": route["action"],
-            "reason": route.get("reason", ""),
+            "action": route["action"], "reason": route.get("reason", ""),
             "target_model": route.get("target_model", model_name),
             "confidence": route.get("confidence", 0),
         },
@@ -311,41 +313,19 @@ async def chat_completions(request: Request) -> JSONResponse:
     }
     if escalation_response:
         result["escalation_response"] = escalation_response
-
     return JSONResponse(result)
 
 
-async def _call_draft_profile(settings, api_key: str, profile: dict,
-                               messages: list[dict]) -> dict:
-    """Call a single draft profile. Returns result dict (never raises)."""
-    t0 = time.time()
-    name = profile["name"]
-    if "endpoint" in profile and "model" in profile:
-        endpoint = profile["endpoint"]
-        model = profile["model"]
-    else:
-        endpoint = getattr(settings, profile["endpoint_key"], "")
-        model = getattr(settings, profile["model_key"], "")
-    system_msg = {"role": "system", "content": profile.get("system_prompt", profile.get("system", ""))}
+# ---------------------------------------------------------------------------
+# Drafts & Elaborate
+# ---------------------------------------------------------------------------
 
-    # Reuse _call_model for consistent HTTP behavior (single httpx client path)
-    status, data, err = await _call_model(
-        endpoint, api_key, model,
-        [system_msg] + messages,
-        temperature=profile.get("temperature"),
-    )
-    latency = int((time.time() - t0) * 1000)
-
-    if status == 200 and data and "choices" in data:
-        content = data["choices"][0]["message"]["content"]
-        return {"profile": name, "response": content, "model": model, "latency_ms": latency, "error": None}
-    return {"profile": name, "response": None, "model": model, "latency_ms": latency,
-            "error": err or f"upstream {status}"}
-
-
-async def drafts(request: Request) -> JSONResponse:
+async def drafts(request: Request):
     """POST /v1/drafts — fire parallel draft calls across profiles."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    import asyncio
+
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
 
@@ -364,11 +344,8 @@ async def drafts(request: Request) -> JSONResponse:
     if not messages:
         return JSONResponse({"error": "no messages"}, status_code=400)
 
-    profiles = body.get("profiles")
-    if profiles is None:
-        profiles = get_draft_profiles(settings)
+    profiles = body.get("profiles") or get_draft_profiles(settings)
 
-    # Dehydrate messages
     dehydrator = Dehydrator(reallog=reallog)
     dehydrated_messages = []
     for msg in messages:
@@ -378,17 +355,14 @@ async def drafts(request: Request) -> JSONResponse:
             content, _ = dehydrator.dehydrate(content)
         dehydrated_messages.append({"role": role, "content": content})
 
-    # Fire all drafts in parallel
     coros = [_call_draft_profile(settings, api_key, p, dehydrated_messages) for p in profiles]
     results = await asyncio.gather(*coros)
 
-    # Rehydrate
     rehydrator = Rehydrator(reallog=reallog)
     for r in results:
         if r["response"] is not None:
             r["response"] = rehydrator.rehydrate(r["response"])
 
-    # Get user input for storage
     user_content = ""
     for msg in reversed(messages):
         if msg.get("role") == "user":
@@ -396,13 +370,10 @@ async def drafts(request: Request) -> JSONResponse:
             break
 
     session_id = "session_" + str(int(time.time()))
-    # Store each draft as its own interaction
     for r in results:
         reallog.add_interaction(
-            session_id=session_id,
-            user_input=user_content,
-            route_action="DRAFT",
-            route_reason=f"profile={r['profile']}",
+            session_id=session_id, user_input=user_content,
+            route_action="DRAFT", route_reason=f"profile={r['profile']}",
             target_model=r["model"],
             response=r["response"] or f"[error: {r['error']}]",
             response_latency_ms=r["latency_ms"],
@@ -411,9 +382,12 @@ async def drafts(request: Request) -> JSONResponse:
     return JSONResponse({"drafts": list(results)})
 
 
-async def elaborate(request: Request) -> JSONResponse:
+async def elaborate(request: Request):
     """POST /v1/elaborate — expand a chosen draft into a full response."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    import json
+
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
 
@@ -437,29 +411,23 @@ async def elaborate(request: Request) -> JSONResponse:
     if not winner_profile or not original_messages:
         return JSONResponse({"error": "winner_profile and messages required"}, status_code=400)
 
-    # Find the winner profile config to get endpoint/model
     all_profiles = get_draft_profiles()
     winner_cfg = next((p for p in all_profiles if p["name"] == winner_profile), None)
     if not winner_cfg:
         return JSONResponse({"error": f"unknown profile: {winner_profile}"}, status_code=400)
 
-    # New-style: endpoint/model directly; Legacy: via settings keys
     if "endpoint" in winner_cfg and "model" in winner_cfg:
-        endpoint = winner_cfg["endpoint"]
-        model = winner_cfg["model"]
+        endpoint, model = winner_cfg["endpoint"], winner_cfg["model"]
     else:
-        endpoint = getattr(settings, winner_cfg["endpoint_key"], "")
-        model = getattr(settings, winner_cfg["model_key"], "")
+        endpoint = getattr(settings, winner_cfg.get("endpoint_key", ""), "")
+        model = getattr(settings, winner_cfg.get("model_key", ""), "")
 
-    # Build system prompt
     prefs = reallog.get_preferences()
     prefs_text = ", ".join(f"{k}={v}" for k, v in prefs.items())
     preamble = Dehydrator.build_preamble()
 
     other_drafts = [d for d in all_drafts if d.get("profile") != winner_profile]
-    other_lines = "\n".join(
-        f"- [{d.get('profile', '?')}] {d.get('response', '')}" for d in other_drafts
-    )
+    other_lines = "\n".join(f"- [{d.get('profile', '?')}] {d.get('response', '')}" for d in other_drafts)
     winner_draft = next((d for d in all_drafts if d.get("profile") == winner_profile), {})
     winner_approach = winner_draft.get("response", "")
 
@@ -474,7 +442,6 @@ async def elaborate(request: Request) -> JSONResponse:
     system_parts.append("Now give a full, detailed response to the user's question.")
     system_content = "\n\n".join(system_parts)
 
-    # Dehydrate original messages
     dehydrator = Dehydrator(reallog=reallog)
     rehydrator = Rehydrator(reallog=reallog)
     dehydrated_messages = []
@@ -489,7 +456,7 @@ async def elaborate(request: Request) -> JSONResponse:
     upstream_messages = [system_msg] + dehydrated_messages
 
     t0 = time.time()
-    status, data, err = await _call_model(endpoint, api_key, model, upstream_messages)
+    status, data, err = await call_model(endpoint, api_key, model, upstream_messages)
     latency = int((time.time() - t0) * 1000)
 
     if status != 200 or data is None:
@@ -497,7 +464,6 @@ async def elaborate(request: Request) -> JSONResponse:
 
     response_text = rehydrator.rehydrate(data["choices"][0]["message"]["content"])
 
-    # Get user input
     user_content = ""
     for msg in reversed(original_messages):
         if msg.get("role") == "user":
@@ -505,48 +471,42 @@ async def elaborate(request: Request) -> JSONResponse:
             break
 
     session_id = "session_" + str(int(time.time()))
-
-    # Store elaboration
     elab_id = reallog.add_interaction(
-        session_id=session_id,
-        user_input=user_content,
-        route_action="ELABORATE",
-        route_reason=f"winner={winner_profile}",
-        target_model=model,
-        response=response_text,
-        response_latency_ms=latency,
+        session_id=session_id, user_input=user_content,
+        route_action="ELABORATE", route_reason=f"winner={winner_profile}",
+        target_model=model, response=response_text, response_latency_ms=latency,
     )
 
-    # Store ranking metadata in the original interaction if provided
     if interaction_id:
         try:
-            conn = reallog._get_connection()
             ranking = json.dumps({
                 "winner_profile": winner_profile,
                 "all_profiles": [d.get("profile") for d in all_drafts],
                 "user_reasoning": user_reasoning,
                 "draft_responses": {d.get("profile"): d.get("response") for d in all_drafts},
             })
-            conn.execute(
-                "UPDATE interactions SET critique = ? WHERE id = ?",
-                (ranking, interaction_id)
-            )
+            conn = reallog._get_connection()
+            conn.execute("UPDATE interactions SET critique = ? WHERE id = ?", (ranking, interaction_id))
             conn.commit()
         except Exception as exc:
             logger.warning("Failed to store ranking: %s", exc)
 
     return JSONResponse({
         "choices": [{"message": {"role": "assistant", "content": response_text}}],
-        "interaction_id": elab_id,
-        "winner_profile": winner_profile,
-        "model": model,
-        "latency_ms": latency,
+        "interaction_id": elab_id, "winner_profile": winner_profile,
+        "model": model, "latency_ms": latency,
     })
 
 
-async def feedback(request: Request) -> JSONResponse:
+# ---------------------------------------------------------------------------
+# Feedback
+# ---------------------------------------------------------------------------
+
+async def feedback(request: Request):
     """POST /v1/feedback — thumbs up/down for an interaction."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
 
@@ -556,7 +516,7 @@ async def feedback(request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid json"}, status_code=400)
 
     interaction_id = body.get("interaction_id")
-    fb = body.get("feedback")  # "up" or "down"
+    fb = body.get("feedback")
     critique = body.get("critique")
 
     if not interaction_id or fb not in ("up", "down"):
@@ -574,8 +534,8 @@ async def feedback(request: Request) -> JSONResponse:
         from vault.semantic_cache import _get_cache
         cache = _get_cache(get_settings())
         if cache:
-            query = interaction["user_input"] if "user_input" in interaction.keys() else ""
-            model = interaction["target_model"] if "target_model" in interaction.keys() else ""
+            query = interaction["user_input"] if interaction["user_input"] else ""
+            model = interaction["target_model"] if interaction["target_model"] else ""
             if query and model:
                 removed = cache.invalidate(query, model)
                 if removed:
@@ -584,253 +544,77 @@ async def feedback(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "interaction_id": interaction_id})
 
 
-async def preferences_list(request: Request) -> JSONResponse:
+# ---------------------------------------------------------------------------
+# Preferences
+# ---------------------------------------------------------------------------
+
+async def preferences_list(request: Request):
     """GET /v1/preferences — list all preferences."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
-    reallog = get_reallog()
-    prefs = reallog.get_preferences()
-    # Never leak internal secrets in the API response
+    prefs = get_reallog().get_preferences()
     prefs.pop("jwt_secret", None)
     return JSONResponse(prefs)
 
 
-async def preferences_set(request: Request) -> JSONResponse:
+async def preferences_set(request: Request):
     """POST /v1/preferences — upsert a preference."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
-
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "invalid json"}, status_code=400)
-
-    key = body.get("key")
-    value = body.get("value")
+    key, value = body.get("key"), body.get("value")
     if not key or value is None:
         return JSONResponse({"error": "key and value required"}, status_code=400)
-
-    reallog = get_reallog()
-    reallog.set_preference(key, value)
+    get_reallog().set_preference(key, value)
     return JSONResponse({"ok": True, "key": key})
 
 
-async def preferences_delete(request: Request) -> JSONResponse:
+async def preferences_delete(request: Request):
     """DELETE /v1/preferences/{key} — remove a preference."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
-
     key = request.path_params.get("key", "")
     if not key:
         return JSONResponse({"error": "key required"}, status_code=400)
-
-    reallog = get_reallog()
-    deleted = reallog.delete_preference(key)
+    deleted = get_reallog().delete_preference(key)
     return JSONResponse({"ok": deleted, "key": key})
 
 
-async def stats(request: Request) -> JSONResponse:
-    """GET /stats — return system statistics."""
-    auth_err = _authenticate(request)
-    if auth_err is not None:
-        return auth_err
-
-    reallog = get_reallog()
-    conn = reallog._get_connection()
-    entity_count = conn.execute("SELECT COUNT(*) AS n FROM pii_map").fetchone()["n"]
-    session_count = conn.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"]
-    interaction_count = conn.execute("SELECT COUNT(*) AS n FROM interactions").fetchone()["n"]
-    thumbs_up = conn.execute(
-        "SELECT COUNT(*) AS n FROM interactions WHERE feedback='up'"
-    ).fetchone()["n"]
-    thumbs_down = conn.execute(
-        "SELECT COUNT(*) AS n FROM interactions WHERE feedback='down'"
-    ).fetchone()["n"]
-    return JSONResponse({
-        "entities": entity_count,
-        "sessions": session_count,
-        "interactions": interaction_count,
-        "thumbs_up": thumbs_up,
-        "thumbs_down": thumbs_down,
-    })
-
-
-async def routing_stats(request: Request) -> JSONResponse:
-    """GET /v1/stats/routing — return current routing stats."""
-    auth_err = _authenticate(request)
-    if auth_err is not None:
-        return auth_err
-
-    reallog = get_reallog()
-    days = int(request.query_params.get("days", 7))
-    from vault.stats_collector import StatsCollector
-    collector = StatsCollector(reallog.db)
-    try:
-        stats = collector.collect(days)
-        return JSONResponse(stats.to_dict())
-    finally:
-        collector.close()
-
-
-async def routing_suggest(request: Request) -> JSONResponse:
-    """POST /v1/routing/suggest — dry-run routing suggestions."""
-    auth_err = _authenticate(request)
-    if auth_err is not None:
-        return auth_err
-
-    reallog = get_reallog()
-    days = 7
-    try:
-        body = await request.json()
-        days = body.get("days", 7)
-    except Exception:
-        pass
-
-    from vault.stats_collector import StatsCollector
-    from vault.routing_updater import RoutingUpdater
-    collector = StatsCollector(reallog.db)
-    updater = RoutingUpdater(reallog.db)
-    try:
-        stats = collector.collect(days)
-        result = updater.dry_run(stats)
-        return JSONResponse(result)
-    finally:
-        collector.close()
-        updater.close()
-
-
-async def routing_update(request: Request) -> JSONResponse:
-    """POST /v1/routing/update — apply routing suggestions (use ?dry=true for preview)."""
-    auth_err = _authenticate(request)
-    if auth_err is not None:
-        return auth_err
-
-    dry = request.query_params.get("dry", "false").lower() == "true"
-    reallog = get_reallog()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "invalid json"}, status_code=400)
-
-    days = body.get("days", 7)
-
-    from vault.stats_collector import StatsCollector
-    from vault.routing_updater import RoutingUpdater, RoutingSuggestion
-    collector = StatsCollector(reallog.db)
-    updater = RoutingUpdater(reallog.db)
-    try:
-        stats = collector.collect(days)
-
-        if dry:
-            result = updater.dry_run(stats)
-            result["status"] = "dry_run_preview"
-            return JSONResponse(result)
-
-        # Validate suggestions if provided
-        provided = body.get("suggestions")
-        if provided:
-            suggestions = [RoutingSuggestion(**s) for s in provided]
-        else:
-            suggestions = updater.suggest_updates(stats)
-
-        if not suggestions:
-            return JSONResponse({"status": "no_changes", "suggestions": []})
-
-        success = updater.apply_updates(suggestions)
-        return JSONResponse({
-            "status": "applied" if success else "failed",
-            "suggestions": [s.to_dict() for s in suggestions],
-        })
-    finally:
-        collector.close()
-        updater.close()
-
-
-async def routing_history(request: Request) -> JSONResponse:
-    """GET /v1/routing/history — list of past routing updates."""
-    auth_err = _authenticate(request)
-    if auth_err is not None:
-        return auth_err
-
-    reallog = get_reallog()
-    limit = int(request.query_params.get("limit", 20))
-
-    from vault.routing_updater import RoutingUpdater
-    updater = RoutingUpdater(reallog.db)
-    try:
-        history = updater.get_history(limit)
-        return JSONResponse({"history": history})
-    finally:
-        updater.close()
-
-
-async def health(request: Request) -> JSONResponse:
-    """GET /v1/health — check service availability."""
-    settings = get_settings()
-    results = {}
-
-    # Check cheap model
-    try:
-        client = _get_client()
-        resp = await client.get(
-            settings.cheap_model_endpoint.rsplit("/chat/completions", 1)[0].rsplit("/v1", 1)[0]
-                or settings.cheap_model_endpoint,
-            timeout=3.0,
-        )
-        results["cheap"] = True
-    except Exception:
-        results["cheap"] = False
-
-    # Check Ollama
-    try:
-        client = _get_client()
-        resp = await client.get(f"{settings.ollama_base_url}/api/tags", timeout=2.0)
-        results["ollama"] = resp.status_code == 200
-    except Exception:
-        results["ollama"] = False
-
-    # Check local llama.cpp model
-    try:
-        local_mgr = _get_local_manager()
-        info = local_mgr.get_loaded_model_info()
-        results["local_model"] = info is not None
-        if info:
-            results["local_model_name"] = info.get("model_name", "unknown")
-    except Exception:
-        results["local_model"] = False
-
-    return JSONResponse(results)
-
-
 # ---------------------------------------------------------------------------
-# Profile management endpoints
+# Profiles
 # ---------------------------------------------------------------------------
 
-async def profiles_list(request: Request) -> JSONResponse:
+async def profiles_list(request: Request):
     """GET /v1/profiles — list all profiles (defaults + custom)."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
-    settings = get_settings()
-    profiles = get_draft_profiles(settings)
+    from vault.profiles import ProfileManager
+    profiles = get_draft_profiles(get_settings())
     return JSONResponse({"profiles": profiles})
 
 
-async def profiles_create(request: Request) -> JSONResponse:
+async def profiles_create(request: Request):
     """POST /v1/profiles — create or update a custom profile."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    from vault.profiles import ProfileManager
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
-
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "invalid json"}, status_code=400)
-
     manager = ProfileManager()
     try:
         profile = manager.add_profile(body)
@@ -839,16 +623,16 @@ async def profiles_create(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
-async def profiles_delete(request: Request) -> JSONResponse:
+async def profiles_delete(request: Request):
     """DELETE /v1/profiles/{name} — remove a custom profile."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    from vault.profiles import ProfileManager
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
-
     name = request.path_params.get("name", "")
     if not name:
         return JSONResponse({"error": "name required"}, status_code=400)
-
     manager = ProfileManager()
     try:
         removed = manager.remove_profile(name)
@@ -859,34 +643,116 @@ async def profiles_delete(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
-# === Local Inference (llama.cpp) ===
+# ---------------------------------------------------------------------------
+# Routing Intelligence
+# ---------------------------------------------------------------------------
 
-_local_manager = None
-
-def _get_local_manager():
-    global _local_manager
-    if _local_manager is None:
-        from vault.model_manager import ModelManager
-        from gateway.deps import get_settings
-        s = get_settings()
-        _local_manager = ModelManager(s.local_models_dir, s.local_gpu_layers, s.local_ctx_size)
-    return _local_manager
-
-
-async def local_models_list(request: Request) -> JSONResponse:
-    """GET /v1/local/models — list available .gguf models."""
-    auth_err = _authenticate(request)
+async def routing_stats(request: Request):
+    """GET /v1/stats/routing — return current routing stats."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
-    manager = _get_local_manager()
-    models = manager.list_models()
-    loaded = manager.get_loaded_model_info()
-    return JSONResponse({"models": models, "loaded": loaded})
+    days = int(request.query_params.get("days", 7))
+    from vault.stats_collector import StatsCollector
+    collector = StatsCollector(get_reallog().db)
+    try:
+        return JSONResponse(collector.collect(days).to_dict())
+    finally:
+        collector.close()
 
 
-async def local_model_load(request: Request) -> JSONResponse:
+async def routing_suggest(request: Request):
+    """POST /v1/routing/suggest — dry-run routing suggestions."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    days = 7
+    try:
+        body = await request.json()
+        days = body.get("days", 7)
+    except Exception:
+        pass
+    from vault.stats_collector import StatsCollector
+    from vault.routing_updater import RoutingUpdater
+    collector = StatsCollector(get_reallog().db)
+    updater = RoutingUpdater(get_reallog().db)
+    try:
+        stats = collector.collect(days)
+        return JSONResponse(updater.dry_run(stats))
+    finally:
+        collector.close()
+        updater.close()
+
+
+async def routing_update(request: Request):
+    """POST /v1/routing/update — apply routing suggestions."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    dry = request.query_params.get("dry", "false").lower() == "true"
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    days = body.get("days", 7)
+    from vault.stats_collector import StatsCollector
+    from vault.routing_updater import RoutingUpdater, RoutingSuggestion
+    collector = StatsCollector(get_reallog().db)
+    updater = RoutingUpdater(get_reallog().db)
+    try:
+        stats = collector.collect(days)
+        if dry:
+            result = updater.dry_run(stats)
+            result["status"] = "dry_run_preview"
+            return JSONResponse(result)
+        provided = body.get("suggestions")
+        suggestions = [RoutingSuggestion(**s) for s in provided] if provided else updater.suggest_updates(stats)
+        if not suggestions:
+            return JSONResponse({"status": "no_changes", "suggestions": []})
+        success = updater.apply_updates(suggestions)
+        return JSONResponse({"status": "applied" if success else "failed",
+                             "suggestions": [s.to_dict() for s in suggestions]})
+    finally:
+        collector.close()
+        updater.close()
+
+
+async def routing_history(request: Request):
+    """GET /v1/routing/history — list of past routing updates."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    limit = int(request.query_params.get("limit", 20))
+    from vault.routing_updater import RoutingUpdater
+    updater = RoutingUpdater(get_reallog().db)
+    try:
+        return JSONResponse({"history": updater.get_history(limit)})
+    finally:
+        updater.close()
+
+
+# ---------------------------------------------------------------------------
+# Local Inference
+# ---------------------------------------------------------------------------
+
+async def local_models_list(request: Request):
+    """GET /v1/local/models — list available .gguf models."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    manager = get_local_manager()
+    return JSONResponse({"models": manager.list_models(), "loaded": manager.get_loaded_model_info()})
+
+
+async def local_model_load(request: Request):
     """POST /v1/local/load — load a model by name."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
     try:
@@ -896,51 +762,50 @@ async def local_model_load(request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid json"}, status_code=400)
     if not model_name:
         return JSONResponse({"error": "model name required"}, status_code=400)
-    gpu_layers = body.get("gpu_layers", None)
+    gpu_layers = body.get("gpu_layers")
     if gpu_layers is not None:
-        _get_local_manager().gpu_layers = int(gpu_layers)
+        get_local_manager().gpu_layers = int(gpu_layers)
     else:
-        # Auto-detect optimal GPU layers based on model size
         from vault.gpu_utils import calculate_optimal_gpu_layers
-        all_models = _get_local_manager().list_models()
-        model_info = next((m for m in all_models if m["name"] == model_name), None)
+        model_info = next((m for m in get_local_manager().list_models() if m["name"] == model_name), None)
         if model_info:
             optimal = calculate_optimal_gpu_layers(model_info["size_mb"], settings.local_ctx_size)
-            _get_local_manager().gpu_layers = optimal
-            logger.info("Auto-detected gpu_layers=%d for model %s (%dMB)",
-                       optimal, model_name, model_info["size_mb"])
-    manager = _get_local_manager()
+            get_local_manager().gpu_layers = optimal
+            logger.info("Auto-detected gpu_layers=%d for model %s (%dMB)", optimal, model_name, model_info["size_mb"])
+    manager = get_local_manager()
     if manager.load_model(model_name):
-        info = manager.get_loaded_model_info()
-        return JSONResponse({"ok": True, "model": info})
+        return JSONResponse({"ok": True, "model": manager.get_loaded_model_info()})
     return JSONResponse({"error": f"model '{model_name}' not found or failed to load"}, status_code=400)
 
 
-async def local_model_unload(request: Request) -> JSONResponse:
+async def local_model_unload(request: Request):
     """POST /v1/local/unload — unload current model."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
-    manager = _get_local_manager()
-    manager.unload()
+    get_local_manager().unload()
     return JSONResponse({"ok": True})
 
 
-async def local_model_status(request: Request) -> JSONResponse:
-    """GET /v1/local/status — loaded model info and resource usage."""
-    auth_err = _authenticate(request)
+async def local_model_status(request: Request):
+    """GET /v1/local/status — loaded model info."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
-    manager = _get_local_manager()
-    info = manager.get_loaded_model_info()
+    info = get_local_manager().get_loaded_model_info()
     return JSONResponse({"loaded": info is not None, "model": info})
 
 
-# === Semantic Cache ===
+# ---------------------------------------------------------------------------
+# Semantic Cache
+# ---------------------------------------------------------------------------
 
-async def cache_stats(request: Request) -> JSONResponse:
+async def cache_stats(request: Request):
     """GET /v1/cache/stats — cache hit rate, size, etc."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
     from vault.semantic_cache import _get_cache
@@ -950,9 +815,10 @@ async def cache_stats(request: Request) -> JSONResponse:
     return JSONResponse({"enabled": True, **cache.stats()})
 
 
-async def cache_clear(request: Request) -> JSONResponse:
+async def cache_clear(request: Request):
     """POST /v1/cache/clear — clear all cached entries."""
-    auth_err = _authenticate(request)
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
     if auth_err is not None:
         return auth_err
     from vault.semantic_cache import _get_cache
@@ -966,3 +832,23 @@ async def cache_clear(request: Request) -> JSONResponse:
         model = None
     cache.clear(model)
     return JSONResponse({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+async def stats(request: Request):
+    """GET /stats — return system statistics."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    conn = get_reallog()._get_connection()
+    return JSONResponse({
+        "entities": conn.execute("SELECT COUNT(*) AS n FROM pii_map").fetchone()["n"],
+        "sessions": conn.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"],
+        "interactions": conn.execute("SELECT COUNT(*) AS n FROM interactions").fetchone()["n"],
+        "thumbs_up": conn.execute("SELECT COUNT(*) AS n FROM interactions WHERE feedback='up'").fetchone()["n"],
+        "thumbs_down": conn.execute("SELECT COUNT(*) AS n FROM interactions WHERE feedback='down'").fetchone()["n"],
+    })
