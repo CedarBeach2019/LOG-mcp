@@ -222,6 +222,24 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 #message-input:focus{border-color:var(--accent)}
 #message-input::placeholder{color:var(--text-muted)}
 .cursor-blink{animation:blink 1s step-end infinite}@keyframes blink{50%{opacity:0}}
+/* Markdown rendering */
+.msg-content pre{background:#1a1b26;border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;margin:8px 0;font-size:13px}
+.msg-content code{background:#1a1b26;padding:2px 6px;border-radius:4px;font-size:13px}
+.msg-content pre code{background:none;padding:0}
+.msg-content h1,.msg-content h2,.msg-content h3{margin:12px 0 6px}
+.msg-content ul,.msg-content ol{padding-left:20px;margin:6px 0}
+.msg-content blockquote{border-left:3px solid var(--accent);padding-left:12px;margin:8px 0;color:var(--text-muted)}
+.msg-content table{border-collapse:collapse;margin:8px 0}
+.msg-content th,.msg-content td{border:1px solid var(--border);padding:6px 12px;text-align:left}
+.msg-content a{color:var(--accent)}
+/* Error toasts */
+.toast{position:fixed;top:20px;right:20px;background:#ff5555;color:#fff;padding:12px 20px;border-radius:10px;font-size:14px;z-index:9999;animation:slideIn .3s ease;max-width:400px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.toast.info{background:#1a1b26;border:1px solid var(--accent);color:var(--text)}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+/* Draft loading */
+.draft-loading{text-align:center;padding:40px;color:var(--text-muted)}
+.draft-loading .spinner{display:inline-block;width:24px;height:24px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 #send-btn{width:44px;height:44px;flex-shrink:0;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s,transform .1s,opacity .2s}
 #send-btn:hover{background:var(--accent-dim)}
 #send-btn:active{transform:scale(.93)}

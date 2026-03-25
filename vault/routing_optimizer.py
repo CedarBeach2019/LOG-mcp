@@ -27,11 +27,12 @@ logger = logging.getLogger("vault.routing_optimizer")
 @dataclass
 class RoutingRule:
     """A single routing rule that can be evaluated by the routing script."""
-    name: str           # e.g., "code_question"
-    pattern: str        # regex pattern to match
-    action: str         # CHEAP_ONLY, ESCALATE, etc.
-    confidence: float   # 0.0 to 1.0
-    reason: str         # human-readable explanation
+    id: int = 0
+    name: str = ""           # e.g., "code_question"
+    pattern: str = ""        # regex pattern to match
+    action: str = ""         # CHEAP_ONLY, ESCALATE, etc.
+    confidence: float = 0.0  # 0.0 to 1.0
+    reason: str = ""         # human-readable explanation
     enabled: bool = True
     created_from: str = "auto"  # "auto", "manual", "default"
     last_updated: str = ""
@@ -88,6 +89,22 @@ class RoutingOptimizer:
                 changes_json TEXT DEFAULT '[]',
                 summary TEXT DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL DEFAULT '',
+                user_input TEXT NOT NULL DEFAULT '',
+                rewritten_input TEXT,
+                route_action TEXT NOT NULL DEFAULT '',
+                route_reason TEXT,
+                target_model TEXT NOT NULL DEFAULT '',
+                response TEXT NOT NULL DEFAULT '',
+                escalation_response TEXT,
+                response_latency_ms INTEGER,
+                escalation_latency_ms INTEGER,
+                feedback TEXT DEFAULT NULL,
+                critique TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
         """)
         conn.commit()
         conn.close()
@@ -118,7 +135,7 @@ class RoutingOptimizer:
              "COMPARE", 0.7, "Comparison requests benefit from multiple perspectives"),
             ("summarize", r"\b(summarize|summary|tldr|brief|recap)\b",
              "CHEAP_ONLY", 0.8, "Summarization is fast and low-risk"),
-            ("translation", r"\b(translate|translation|in .+ language|to .+)\b",
+            ("translation", r"\btranslate\b|\btranslation\b|\bin (french|spanish|german|japanese|chinese|korean|italian|portuguese|arabic|hindi|russian|dutch)\b",
              "CHEAP_ONLY", 0.7, "Translation is well-handled by fast models"),
             ("explanation", r"\b(explain|elaborate|detail|expand|describe)\b",
              "CHEAP_ONLY", 0.5, "Explanations: default confidence, learns from feedback"),
@@ -171,12 +188,12 @@ class RoutingOptimizer:
             SELECT route_action, target_model, feedback, critique,
                    user_input, response, response_latency_ms
             FROM interactions
-            WHERE timestamp >= ? AND feedback IS NOT NULL
-            ORDER BY timestamp DESC
+            WHERE created_at >= ? AND feedback IS NOT NULL
+            ORDER BY created_at DESC
         """, (cutoff,)).fetchall()
 
         all_recent = conn.execute("""
-            SELECT COUNT(*) as n FROM interactions WHERE timestamp >= ?
+            SELECT COUNT(*) as n FROM interactions WHERE created_at >= ?
         """, (cutoff,)).fetchone()["n"]
 
         changes = []
@@ -185,13 +202,15 @@ class RoutingOptimizer:
         rules_disabled = 0
 
         if len(interactions) < min_interactions:
-            conn.close()
-            return RoutingOptimization(
+            result = RoutingOptimization(
                 timestamp=datetime.now().isoformat(),
                 interactions_analyzed=all_recent,
                 rules_added=0, rules_modified=0, rules_disabled=0,
                 changes=[], summary=f"Insufficient feedback data ({len(interactions)} interactions with feedback, need {min_interactions})"
             )
+            self._log_optimization(result)
+            conn.close()
+            return result
 
         # --- Analysis 1: Per-route feedback rates ---
         route_feedback = {}

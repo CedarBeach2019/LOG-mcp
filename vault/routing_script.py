@@ -29,13 +29,32 @@ logger = logging.getLogger("vault.routing_script")
 # ---------------------------------------------------------------------------
 
 _STATIC_RULES: list[dict] = [
-    {"name": "code_block", "pattern": r"```", "action": "ESCALATE", "confidence": 0.8},
-    {"name": "long_message", "pattern": r".{500,}", "action": "ESCALATE", "confidence": 0.6},
+    # Command prefixes (highest priority)
     {"name": "draft_mode", "pattern": r"^/draft\b", "action": "DRAFT", "confidence": 1.0},
     {"name": "local_mode", "pattern": r"^/local\b", "action": "LOCAL", "confidence": 1.0},
     {"name": "manual_override", "pattern": r"^/(deepseek|gpt|claude|local|cheap|escalate)\b", "action": "MANUAL_OVERRIDE", "confidence": 1.0},
+    # Heuristic signals
+    {"name": "code_block", "pattern": r"```", "action": "ESCALATE", "confidence": 0.8},
+    {"name": "long_message", "pattern": r".{500,}", "action": "ESCALATE", "confidence": 0.6},
+    # Escalation patterns (complex tasks need quality)
+    {"name": "debug", "pattern": r"\b(debug|traceback|error|fix|broken|bug)\b", "action": "ESCALATE", "confidence": 0.7},
+    {"name": "write_code", "pattern": r"\b(write|implement|create|build|code)\s+(a |the )?(function|class|module|script|program|app|service|api|endpoint)", "action": "ESCALATE", "confidence": 0.7},
+    {"name": "explain_complex", "pattern": r"\b(explain|describe)\b.*\b(in detail|thoroughly|step.by.step|comprehensive)\b", "action": "ESCALATE", "confidence": 0.6},
+    {"name": "plan", "pattern": r"\b(plan|strategy|architecture|roadmap|migration)\b", "action": "ESCALATE", "confidence": 0.7},
+    {"name": "review", "pattern": r"\b(review|audit|critique|analyze|evaluate|improve|optimize)\b", "action": "ESCALATE", "confidence": 0.7},
+    {"name": "design", "pattern": r"\b(design|architect|structure|schema)\b", "action": "ESCALATE", "confidence": 0.7},
+    # Comparison (dual-model)
     {"name": "comparison", "pattern": r"\b(compare|vs|versus|difference)\b", "action": "COMPARE", "confidence": 0.5},
+    # Cheap patterns (simple queries)
+    {"name": "factual_question", "pattern": r"^(what|how|who|when|where|which|count|convert|define|calculate)\b", "action": "CHEAP_ONLY", "confidence": 0.7},
+    {"name": "acknowledgment", "pattern": r"^(ok|thanks|thank you|got it|sure|great|nice|cool)\b", "action": "CHEAP_ONLY", "confidence": 0.9},
+    {"name": "help", "pattern": r"^help$", "action": "CHEAP_ONLY", "confidence": 0.8},
 ]
+
+
+def _normalize_action(action: str) -> str:
+    """Normalize action to lowercase, canonical form."""
+    return action.lower().replace("cheap_only", "cheap").replace("escalate", "escalation")
 
 
 def classify_static(message: str, length: int = 0, has_code: bool = False) -> dict:
@@ -44,7 +63,7 @@ def classify_static(message: str, length: int = 0, has_code: bool = False) -> di
         try:
             if re.search(rule["pattern"], message, re.IGNORECASE | re.DOTALL):
                 return {
-                    "action": rule["action"],
+                    "action": _normalize_action(rule["action"]),
                     "confidence": rule["confidence"],
                     "reason": f"[static] {rule['name']}",
                 }
@@ -52,7 +71,7 @@ def classify_static(message: str, length: int = 0, has_code: bool = False) -> di
             continue
 
     return {
-        "action": "CHEAP_ONLY",
+        "action": "cheap",
         "confidence": 0.3,
         "reason": "[static] no pattern matched",
     }
@@ -92,8 +111,9 @@ def classify(message: str, length: int = 0, has_code: bool = False) -> dict:
         if rule["action"] in ("DRAFT", "LOCAL", "MANUAL_OVERRIDE"):
             try:
                 if re.search(rule["pattern"], message, re.IGNORECASE):
+                    action = rule["action"].lower()
                     return {
-                        "action": rule["action"],
+                        "action": action,
                         "confidence": rule["confidence"],
                         "reason": f"[static] {rule['name']}",
                     }
@@ -104,6 +124,7 @@ def classify(message: str, length: int = 0, has_code: bool = False) -> dict:
     try:
         result = optimizer.evaluate_message(message)
         result["reason"] = f"[dynamic] {result.get('reason', '')}"
+        result["action"] = _normalize_action(result["action"])
         return result
     except Exception as exc:
         logger.warning("Optimizer failed, falling back to static: %s", exc)
@@ -112,9 +133,12 @@ def classify(message: str, length: int = 0, has_code: bool = False) -> dict:
 
 def resolve_action(action: str, cheap_model: str, escalation_model: str) -> tuple[str, str]:
     """Map an action to (endpoint_type, model_name)."""
+    action = action.upper()  # accept both cases
     mapping = {
         "CHEAP_ONLY": ("cheap", cheap_model),
+        "CHEAP": ("cheap", cheap_model),
         "ESCALATE": ("escalation", escalation_model),
+        "ESCALATION": ("escalation", escalation_model),
         "COMPARE": ("compare", cheap_model),
         "DRAFT": ("draft", cheap_model),
         "LOCAL": ("local", "local"),
