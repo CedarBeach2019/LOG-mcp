@@ -2,9 +2,9 @@
 
 ## Overview
 
-LOG-mcp is a personal AI gateway that sits between users and AI services. It provides
-intelligent routing, privacy protection, draft comparison, preference learning, and
-optional local inference.
+LOG-mcp is a self-hosted AI gateway that sits between users and AI services. It provides
+intelligent routing, privacy protection, draft comparison, preference learning, adaptive
+model selection, and optional local inference on constrained hardware (Jetson).
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -14,164 +14,133 @@ optional local inference.
 │  │ index.htm│  │  scripts │  │  SDK     │  │  integration │    │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────┬───────┘    │
 │       └──────────────┴────────────┴───────────────┘             │
-│                          │ POST /v1/chat/completions             │
+│               POST /v1/chat/completions (OpenAI-compatible)     │
 └──────────────────────────┼──────────────────────────────────────┘
                            │
 ┌──────────────────────────┼──────────────────────────────────────┐
-│                     Gateway Layer (Starlette)                    │
-│                          │                                      │
-│  ┌───────────┐  ┌───────▼───────┐  ┌───────────────┐          │
-│  │   Auth    │  │   PII Engine  │  │   Cache       │          │
-│  │   JWT     │→ │  Dehydrator   │  │  SemanticCache│          │
-│  │           │  │  Rehydrator   │  │  (LRU+sim)   │          │
-│  └───────────┘  └───────┬───────┘  └───────────────┘          │
-│                        │                                       │
-│  ┌─────────────────────▼──────────────────────────┐            │
-│  │              Routing Script                     │            │
-│  │  classify(message) → CHEAP_ONLY | ESCALATE |    │            │
-│  │  DRAFT | MANUAL_OVERRIDE | LOCAL               │            │
-│  │  ~5ms, regex-based, zero ML                    │            │
-│  └─────────────────────┬──────────────────────────┘            │
-│                        │                                       │
-│  ┌─────────┬───────────┼───────────┬──────────┐               │
-│  │  Local  │   Cheap   │  Escalate  │  Draft   │               │
-│  │ llama.  │  deepseek │  deepseek  │ parallel │               │
-│  │ cpp     │  -chat    │  -reasoner │  profiles│               │
-│  │ (GPU)   │  (cloud)  │  (cloud)   │  (cloud) │               │
-│  └────┬────┘  └────┬────┘  └────┬─────┘  └────┬────┘         │
-│       └────────────┴────────────┴────────────┘                │
-│                          │                                      │
-│  ┌───────────────────────▼──────────────────────┐              │
-│  │              Feedback & Preferences          │              │
-│  │  👍👎 → interactions table → StatsCollector   │              │
-│  │  → RoutingUpdater → updated routing rules     │              │
-│  └──────────────────────────────────────────────┘              │
+│                  Gateway Layer (Starlette)                       │
+│                                                                 │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────┐  ┌───────────┐  │
+│  │  Auth    │  │  Rate Limit  │  │ Tracing  │  │  CORS     │  │
+│  │  JWT     │  │  Token Bucket│  │ Middleware│  │  Config   │  │
+│  └──────────┘  └──────────────┘  └──────────┘  └───────────┘  │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              Request Pipeline                            │   │
+│  │  1. Auth check                                          │   │
+│  │  2. Semantic cache lookup (if enabled + model loaded)   │   │
+│  │  3. PII dehydration (privacy mode)                      │   │
+│  │  4. Routing classification (static + dynamic optimizer)  │   │
+│  │  5. Model call (with retry + fallback)                  │   │
+│  │  6. PII rehydration                                     │   │
+│  │  7. Session storage                                     │   │
+│  │  8. Cache store + adaptive routing record               │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌──────────────────────┐  ┌────────────────────────────────┐  │
+│  │   Routing Script     │  │   Adaptive Router              │  │
+│  │   Static + Dynamic   │  │   Model health + cost + calib  │  │
+│  └──────────────────────┘  └────────────────────────────────┘  │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+┌──────────────────────────┼──────────────────────────────────────┐
+│                    Provider Layer                               │
+│                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐  │
+│  │ Cheap Model  │  │ Escalation   │  │ Local Model            │  │
+│  │ DeepSeek-    │  │ DeepSeek-    │  │ Subprocess (Jetson)   │  │
+│  │ Chat         │  │ Reasoner     │  │ or in-process          │  │
+│  └──────────────┘  └──────────────┘  └───────────────────────┘  │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Error Boundary: retry → fallback → friendly error        │   │
+│  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                            │
 ┌──────────────────────────┼──────────────────────────────────────┐
-│                     Data Layer (SQLite)                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐        │
-│  │ interactions │  │  pii_map     │  │ user_        │        │
-│  │ (chat log +  │  │ (entity      │  │ preferences  │        │
-│  │  feedback +  │  │  tokens)     │  │ (learned     │        │
-│  │  routing)    │  │              │  │  defaults)   │        │
-│  └──────────────┘  └──────────────┘  └──────────────┘        │
-│  ┌──────────────┐  ┌──────────────┐                           │
-│  │ routing_     │  │ profiles.json│                           │
-│  │ updates      │  │ (custom      │                           │
-│  │ (history)    │  │  providers)  │                           │
-│  └──────────────┘  └──────────────┘                           │
+│                     Data Layer                                  │
+│                                                                 │
+│  ┌──────────────────────┐  ┌────────────────────────────────┐  │
+│  │  SQLite (WAL mode)   │  │  vault/ (Python modules)       │  │
+│  │  - interactions      │  │  - core.py (PII engine)        │  │
+│  │  - routing_rules     │  │  - routing_script.py          │  │
+│  │  - routing_opts      │  │  - routing_optimizer.py       │  │
+│  │  - preferences       │  │  - adaptive_routing.py        │  │
+│  │  - profiles          │  │  - semantic_cache.py          │  │
+│  └──────────────────────┘  │  - local_inference.py         │  │
+│                             │  - model_lifecycle.py        │  │
+│                             │  - training_pipeline.py      │  │
+│                             │  - prompt_intelligence.py    │  │
+│                             └────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## File Structure
+
+```
+LOG-mcp/
+├── gateway/                    # HTTP server (Starlette)
+│   ├── server.py              # App setup, middleware, routes
+│   ├── routes.py              # All API endpoints
+│   ├── shared.py              # Shared utilities (auth, HTTP client, model manager)
+│   ├── deps.py                # Settings singleton, DB reset
+│   ├── error_boundary.py      # Retry + fallback + friendly errors
+│   ├── tracing.py             # Request tracing middleware
+│   ├── observability.py       # Metrics collector
+│   ├── rate_limit.py          # Token bucket rate limiter
+│   └── startup.py             # Startup validation
+├── vault/                      # Business logic
+│   ├── core.py                # PII dehydration/rehydration, RealLog DB
+│   ├── config.py              # Settings dataclass (env-driven)
+│   ├── routing_script.py      # Static + dynamic routing rules
+│   ├── routing_optimizer.py   # DB-backed auto-optimizing rules
+│   ├── adaptive_routing.py    # Model health, cost tracking, calibration
+│   ├── semantic_cache.py      # LRU + cosine similarity cache
+│   ├── local_inference.py     # In-process llama-cpp-python backend
+│   ├── model_manager.py       # Model loading/unloading lifecycle
+│   ├── model_subprocess.py    # Isolated GPU process for Jetson
+│   ├── model_client.py        # Subprocess client (compatible API)
+│   ├── model_lifecycle.py     # HuggingFace download, VRAM estimation, hot-swap
+│   ├── training_pipeline.py   # LoRA/DPO export from draft rankings
+│   ├── prompt_intelligence.py # System templates, context window, few-shot
+│   └── unified_store.py       # Message storage migration
+├── web/
+│   └── index.html             # Single-file SPA (dark theme, ~1600 lines)
+├── tests/                     # 325 tests
+├── docs/                      # Documentation
+├── scripts/                   # Setup and utility scripts
+└── docker/                    # Docker deployment
+```
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/auth/login` | JWT authentication |
+| POST | `/v1/chat/completions` | Main chat (OpenAI-compatible) |
+| POST | `/v1/drafts` | Multi-model draft comparison |
+| POST | `/v1/elaborate` | Expand winning draft |
+| POST | `/v1/feedback` | Thumbs up/down + critique |
+| GET | `/v1/health` | Deep health check (DB, model, disk, memory) |
+| GET/POST/DELETE | `/v1/preferences` | User preferences |
+| GET/POST/DELETE | `/v1/profiles` | Provider profiles |
+| GET/POST/DELETE | `/v1/sessions` | Conversation sessions |
+| GET/POST/DELETE | `/v1/cache` | Semantic cache |
+| GET/POST | `/v1/local/*` | Local model management |
+| GET | `/v1/local/catalog` | Available models to download |
+| POST | `/v1/local/download` | Download model from HuggingFace |
+| GET/POST | `/v1/routing/*` | Routing rules & optimization |
+| GET | `/v1/metrics` | Request metrics dashboard |
+| GET/PUT/POST | `/v1/config` | Runtime configuration |
+| GET | `/v1/adaptive/*` | Adaptive routing dashboard |
+| GET/POST | `/v1/training/*` | Training data export |
+
 ## Key Design Decisions
 
-### Why Rule-Based Routing (Not ML)
-- Runs in ~5ms via regex (no model inference needed)
-- Interpretable and debuggable
-- ML optimizes the rules over time, never blocks requests
-- Default to escalate when uncertain (safer than under-serving)
-
-### Why Instant-Send Architecture
-- Cheap model fires immediately on connection (~0ms added latency)
-- Routing classification runs in parallel with the cheap model call
-- If escalation needed, fires escalation while cheap model response streams back
-- User sees first response faster, gets escalation quality if needed
-
-### Why SQLite (Not PostgreSQL)
-- Zero-config, no external service dependency
-- Perfect for single-user self-hosted deployment
-- WAL mode enables concurrent reads
-- Jetson-friendly (no container overhead)
-
-### Why In-Process llama.cpp (Not Ollama)
-- Zero IPC overhead (ctypes bindings)
-- Full control over GPU memory allocation
-- Native prompt caching support
-- LoRA hot-swapping
-- Works with async Python via `asyncio.to_thread`
-
-### Why Semantic Cache (Not Just Exact Match)
-- "What is machine learning?" and "How does ML work?" should share cache
-- Cosine similarity on sentence-transformer embeddings (384 dims)
-- Falls back to exact match when no embedding function available
-- Invalidated on negative feedback
-
-## Module Map
-
-```
-vault/
-  config.py           — Pydantic settings (LOG_ env prefix)
-  core.py             — RealLog (SQLite), Dehydrator, Rehydrator, PII detection
-  routing_script.py   — Rule-based message classifier
-  profiles.py         — ProfileManager (JSON persistence, CRUD)
-  draft_profiles.py   — Re-exports from profiles (backwards compat)
-  local_inference.py  — LocalInferenceBackend (llama-cpp-python)
-  model_manager.py    — ModelManager (scan, load, auto-select)
-  semantic_cache.py   — SemanticCache (LRU, cosine sim, TTL)
-  gpu_utils.py        — GPU memory detection, auto layer calculation
-  stats_collector.py  — RoutingStats computation from interactions
-  routing_updater.py  — Routing rule suggestions from stats
-  reallog_db.py       — Database schema and migrations
-
-gateway/
-  routes.py           — Core routing, _call_model, shared utilities
-  api_auth.py         — Login handler
-  api_chat.py         — Chat completions, drafts, elaborate
-  api_feedback.py     — Feedback CRUD
-  api_preferences.py  — User preferences CRUD
-  api_profiles.py     — Custom profiles CRUD
-  api_routing.py      — Routing stats, suggestions, updates
-  api_local.py        — Local model management
-  api_cache.py        — Cache stats and clear
-  api_system.py       — Health, stats, static files
-  server.py           — Starlette app, route registration
-  auth.py             — JWT creation and verification
-  deps.py             — Singleton managers (settings, reallog)
-
-web/
-  index.html          — Dark-theme SPA (1192 lines, inline CSS/JS)
-
-tests/                 — 187 tests
-docs/                  — Architecture docs, roadmap, research
-```
-
-## API Surface
-
-### Core
-- `POST /v1/chat/completions` — OpenAI-compatible chat (with routing, cache, PII)
-- `POST /auth/login` — Get JWT token
-
-### Feedback & Preferences
-- `POST /v1/feedback` — Submit 👍👎 with optional critique
-- `GET/POST/DELETE /v1/preferences` — View/set/delete learned preferences
-
-### Profiles
-- `GET /v1/profiles` — List all profiles
-- `POST /v1/profiles` — Create custom profile
-- `DELETE /v1/profiles/{name}` — Delete custom profile
-
-### Draft Round
-- `POST /v1/drafts` — Get parallel short responses from multiple profiles
-- `POST /v1/elaborate` — Winner expands into full response
-
-### Local Inference
-- `GET /v1/local/models` — List available .gguf files
-- `POST /v1/local/load` — Load a model (auto-detects GPU layers)
-- `POST /v1/local/unload` — Unload current model
-- `GET /v1/local/status` — Loaded model info
-
-### Cache
-- `GET /v1/cache/stats` — Hit rate, size, entries
-- `POST /v1/cache/clear` — Clear cache
-
-### Routing Intelligence
-- `GET /v1/stats/routing` — Per-class, per-model, per-profile stats
-- `POST /v1/routing/suggest` — Dry-run routing rule updates
-- `POST /v1/routing/update` — Apply routing updates
-- `GET /v1/routing/history` — Past routing changes
-
-### System
-- `GET /` — Chat UI
-- `GET /v1/health` — Service health check
-- `GET /stats` — Overall statistics
+1. **SQLite WAL mode** — concurrent reads without blocking, single-file simplicity
+2. **Subprocess model isolation** — GPU memory doesn't conflict with uvicorn on Jetson
+3. **Rule-based routing, ML optimization** — regex runs in ~5ms; ML updates rules over time
+4. **Draft round as core primitive** — multi-model comparison generates unique training data
+5. **Error boundary pattern** — retry → fallback → friendly error (never raw 502)
+6. **Feedback-driven learning** — every thumbs up/down feeds routing optimizer + calibration
+7. **Singleton pattern for shared state** — settings, model manager, cache, router

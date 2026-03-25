@@ -1,9 +1,8 @@
 <!-- Badges -->
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![MIT License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-108%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-325%20passing-brightgreen)
 ![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker)
-[![Cloudflare Workers](https://img.shields.io/badge/live-Cloudflare%20Workers-F38020?logo=cloudflare)](https://log-mcp-vault.magnus-digennaro.workers.dev/)
 
 # LOG-mcp
 
@@ -25,183 +24,97 @@ You ask a question. LOG-mcp sends it to three models simultaneously:
   Pick the one you like. 👍👎 teaches the router next time.
 ```
 
----
-
-## Architecture
-
-```
- ┌──────────────┐     ┌───────────────────────────────────┐     ┌──────────────┐
- │              │     │  LOG-mcp Gateway                   │     │              │
- │   Your App   │────▶│  ┌─────────┐  ┌───────────────┐  │────▶│  Cloud APIs  │
- │   / Agent    │     │  │ PII      │  │ Rule Router   │  │     │  DeepSeek    │
- │              │     │  │ Engine   │──│ (~5ms regex)  │  │     │  Claude      │
- │              │◀────│  └─────────┘  └──────┬────────┘  │◀────│  GPT         │
- └──────────────┘     │                      │            │     │  Ollama      │
-                      │  ┌───────────────────▼────────┐  │     └──────────────┘
-                      │  │   Draft Round               │  │
-                      │  │   precise │ creative │ deep  │  │
-                      │  │   → fire all → pick best    │  │
-                      │  └────────────────────────────┘  │
-                      │  ┌────────────────────────────┐  │
-                      │  │   Local Vault (SQLite)      │  │
-                      │  │   preferences · feedback    │  │
-                      │  │   interactions · entities   │  │
-                      │  └────────────────────────────┘  │
-                      └───────────────────────────────────┘
-```
-
-**Message flow:** PII stripped → router classifies → draft round fires → response rehydrated. The AI never sees your data. You see the best answer.
-
----
-
 ## What It Does
 
-### Intelligent Routing
-Every message is classified in ~5ms using pattern matching. Simple questions ("what is 5km in miles?") go to the fast/cheap model. Complex ones ("debug my traceback" or "write an essay about…") escalate to a reasoning model. You can override with `/local`, `/cloud`, `/reason`, or `/draft`.
-
-### Draft Round
-For any request, fire multiple model profiles in parallel — each with different temperatures and system prompts. Pick the response that fits, or let the router learn from your choice over time.
-
-### Privacy by Default
-PII (names, emails, phones, SSNs, credit cards, API keys, addresses) is detected and replaced with tokens *before* any cloud API call. The mapping lives only in your local SQLite vault. Cloud providers never see your real data.
-
-### Preference Learning
-Every interaction is stored. Your 👍/👎 feedback and text critiques feed back into routing decisions. The system gets better at choosing the right model for *you* specifically — not some averaged user.
-
-### OpenAI-Compatible API
-Drop it in as a replacement for any OpenAI SDK. Same `/v1/chat/completions` endpoint, same response format. Works with Claude, GPT, DeepSeek, Ollama — whatever you configure.
-
----
+- **Privacy-first** — PII (emails, phones, names, addresses) is stripped before reaching any cloud API and rehydrated in the response. Your data never leaves clean.
+- **Intelligent routing** — regex + ML-optimized rules classify every message: cheap for facts, escalation for code, comparison for tradeoffs, local when available.
+- **Draft comparison** — the core primitive. Multiple profiles respond in parallel, you pick the best. This generates unique comparative training data that doesn't exist anywhere else.
+- **Adaptive learning** — tracks model health, API costs, and confidence calibration. Routes around degraded providers automatically.
+- **Local inference** — runs GGUF models on your hardware (Jetson, laptop, server). Subprocess isolation prevents GPU memory conflicts.
+- **Error resilience** — retry + fallback chain with friendly messages. Never a raw 502 to the user.
+- **Training pipeline** — exports draft rankings as LoRA/DPO datasets for fine-tuning local models.
 
 ## Quick Start
 
-**Docker (recommended):**
 ```bash
+# Clone and setup
 git clone https://github.com/CedarBeach2019/LOG-mcp.git
 cd LOG-mcp
-docker compose up
+pip install -r requirements.txt
+
+# Set your API keys
+export LOG_API_KEY="sk-your-deepseek-key"
+export LOG_PASSPHRASE="your-secret-passphrase"
+
+# Run
+python -m gateway.server
 ```
 
-That's it. The gateway is running on `http://localhost:8000`.
+Open `http://localhost:8000` and enter your passphrase.
 
-**Manual install:**
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **PII Dehydration** | Strips emails, phones, names, addresses, dates before API calls |
+| **Dynamic Routing** | Auto-optimizing classifier from user feedback |
+| **Draft Round** | 3 profiles respond, you rank them |
+| **Adaptive Router** | Model health scoring, cost tracking, confidence calibration |
+| **Semantic Cache** | Cosine similarity cache with local embeddings |
+| **Local Inference** | llama-cpp-python with subprocess GPU isolation |
+| **Error Boundaries** | Retry + fallback + friendly error messages |
+| **Session Management** | Persistent conversations with history |
+| **Streaming** | Server-sent events with blinking cursor |
+| **Observability** | Request tracing, latency metrics, per-request timing |
+| **Rate Limiting** | Token bucket per IP (60/min, 10 burst) |
+| **Training Export** | LoRA JSONL + DPO pairs from draft rankings |
+| **Model Catalog** | Download GGUF models from HuggingFace |
+| **Runtime Config** | Update settings without restart |
+| **Prompt Templates** | 7 system prompts + context window management |
+
+## Configuration
+
+All settings via environment variables:
+
 ```bash
-pip install -e ".[full]"
-log init
+LOG_API_KEY=sk-...              # DeepSeek API key
+LOG_PASSPHRASE=secret           # Login passphrase
+LOG_CHEAP_MODEL=deepseek-chat   # Cheap model name
+LOG_ESCALATION_MODEL=deepseek-reasoner  # Quality model name
+LOG_DB_PATH=~/.log/vault.db     # SQLite database path
+LOG_PRIVACY_MODE=true           # Enable PII stripping
+LOG_CACHE_ENABLED=true          # Enable semantic cache
+LOG_LOCAL_USE_SUBPROCESS=false  # Subprocess GPU isolation (auto on Jetson)
+LOG_CORS_ORIGINS=*              # Comma-separated allowed origins
 ```
-
-**Point your app at it:**
-```bash
-export OPENAI_BASE_URL=http://localhost:8000/v1
-export OPENAI_API_KEY=your-deepseek-key
-```
-
----
 
 ## Deployment
 
-| Mode | Setup | Best For |
-|---|---|---|
-| **Docker** | `docker compose up` | Self-hosted, air-gapped, one command |
-| **Cloudflare Workers** | `cd cloudflare && npx wrangler deploy` | Global edge, free tier (100k req/day) |
-| **Local** | `pip install -e .` | Development, scripting |
-
-See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough.
-
----
-
-## CLI
-
+### Docker
 ```bash
-log dehydrate "Call Jane Doe at jane@example.com"   # Strip PII
-log scout deepseek "What is photosynthesis?"         # Route + respond
-log draft "Explain quantum computing"                 # Draft round: 3 models
-log stats                                            # Vault stats
-log rehydrate <session-id>                           # Restore original text
+docker compose up -d
 ```
 
----
-
-## MCP Server
-
-Use as a [Model Context Protocol](https://modelcontextprotocol.io/) server:
-
-```json
-{
-  "mcpServers": {
-    "log-vault": {
-      "command": "python",
-      "args": ["-m", "mcp.server"],
-      "cwd": "/path/to/LOG-mcp"
-    }
-  }
-}
-```
-
-Tools: `dehydrate`, `rehydrate`, `stats`, `list_sessions`, `draft`, `feedback`.
-
----
-
-## For Developers
-
-### Adding a Provider
-
-Edit `vault/config.py` — add a new `cheap_model_endpoint` / `escalation_model_endpoint` pointing to any OpenAI-compatible API. That's it. The draft round and router will use it.
-
-### Custom Routing
-
-Edit `vault/routing_script.py`. The `RULES` dict maps regex patterns to routing actions (`CHEAP_ONLY`, `ESCALATE`). Add patterns for your domain:
-
-```python
-"ESCALATE": {
-    "patterns": [
-        r"my (legal|medical|financial)\b",  # your custom rule
-        # ...
-    ]
-}
-```
-
-### Draft Profiles
-
-Edit `vault/draft_profiles.py` to change the parallel draft personas (temperature, system prompt, model, max length).
-
-### Configuration
-
-All settings via `LOG_` environment variables. See `vault/config.py` for the full list. Key ones:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `LOG_privacy_mode` | `true` | PII-strip before any cloud call |
-| `LOG_instant_send` | `true` | Fire cheap model immediately |
-| `LOG_draft_mode` | `true` | Enable draft round |
-| `LOG_cheap_model_name` | `deepseek-chat` | Fast model |
-| `LOG_escalation_model_name` | `deepseek-reasoner` | Reasoning model |
-| `LOG_ollama_base_url` | `http://localhost:11434` | Local LLM |
-
----
-
-## Testing
-
+### Bare Metal (Jetson)
 ```bash
-pytest tests/ -v                    # 108 tests
-pytest --cov=vault --cov=gateway    # With coverage
+# Subprocess mode auto-detected on Jetson (/etc/nv_tegra_release)
+pip install -r requirements-jetson.txt
+python -m gateway.server
 ```
 
----
+### Cloudflare (PII only)
+The Cloudflare Worker handles PII dehydration at the edge. See `cloudflare/` for setup.
 
-## Project Links
+## API
 
-| | |
-|---|---|
-| 🚀 [Quickstart Guide](QUICKSTART.md) | Up and running in 5 minutes |
-| 🗺️ [Roadmap](ROADMAP.md) | What's coming next |
-| 🤝 [Contributing](CONTRIBUTING.md) | How to contribute |
-| 📐 [Architecture](docs/ARCHITECTURE.md) | Technical deep dive |
-| 🔮 [Vision](docs/VISION.md) | Where this is heading |
-| 📄 [License](LICENSE) | MIT |
+OpenAI-compatible `POST /v1/chat/completions`. Works with any OpenAI SDK or compatible client.
 
----
+Full endpoint list in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Roadmap
+
+See [docs/ROADMAP-v4.md](docs/ROADMAP-v4.md) for the full roadmap (Phase 4-7).
 
 ## License
 
-MIT — fork it, modify it, run it however you want. Your gateway, your rules.
+MIT
