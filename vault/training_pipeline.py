@@ -249,9 +249,11 @@ def run_export_pipeline(db_path: str, output_dir: str | Path,
     rankings = extract_ranking_data(db_path, days_back)
     feedback = extract_feedback_data(db_path, days_back)
 
-    # Process
-    rankings = filter_quality(rankings)
-    rankings = deduplicate(rankings)
+    # Process — use quality scoring from dataset_quality module
+    from vault.dataset_quality import filter_by_quality
+    from vault.dataset_manager import deduplicate_interactions
+    rankings = filter_by_quality(rankings, min_composite=0.2)
+    rankings = deduplicate_interactions(rankings)
 
     # Export
     lora_count = export_for_lora(rankings, output_dir / "lora_train.jsonl")

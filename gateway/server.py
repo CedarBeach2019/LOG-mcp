@@ -5,6 +5,10 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.routing import Route
 
 from gateway.routes import (
+    dataset_deduplicate,
+    dataset_export,
+    dataset_score,
+    dataset_stats,
     prompt_preview,
     prompt_template_update,
     prompt_templates_list,
@@ -91,6 +95,10 @@ routes = [
     Route("/v1/sessions/{session_id}", session_get, methods=["GET"]),
     Route("/v1/sessions/{session_id}", session_delete, methods=["DELETE"]),
     Route("/v1/metrics", metrics_dashboard, methods=["GET"]),
+    Route("/v1/dataset/stats", dataset_stats, methods=["GET"]),
+    Route("/v1/dataset/score", dataset_score, methods=["POST"]),
+    Route("/v1/dataset/export", dataset_export, methods=["GET"]),
+    Route("/v1/dataset/deduplicate", dataset_deduplicate, methods=["POST"]),
     Route("/v1/training/export", training_export, methods=["POST"]),
     Route("/v1/training/status", training_status, methods=["GET"]),
     Route("/v1/config", config_get, methods=["GET"]),

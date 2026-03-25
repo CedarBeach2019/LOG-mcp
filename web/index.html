@@ -339,6 +339,13 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       </div>
       <div style="font-size:12px;color:var(--text-muted);margin-top:8px;padding:0 4px">When on, messages are processed locally and not stored externally.</div>
     </div>
+    <div class="sp-section"><h3>System Prompt</h3>
+      <div class="sp-form-row"><label class="sp-form-label">Template</label>
+        <select id="sp-template-select" style="width:100%;padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:var(--font);outline:none">
+          <option value="">Auto (route-based)</option>
+        </select>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:6px;padding:0 4px">Select a system prompt template, or leave on Auto for route-based selection.</div>
     <div class="sp-section"><h3>Profiles</h3>
       <div id="profiles-list"></div>
       <button class="sp-add" id="profiles-add">+ Add custom profile</button>
@@ -772,6 +779,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     try {
       let body = { model: 'default', messages: chatHistory, stream: true };
       if (currentSessionId) body.session_id = currentSessionId;
+      const tpl = $('#sp-template-select');
+      if (tpl && tpl.value) body.system_prompt = tpl.value;
       const r = await fetch(API + '/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -780,8 +789,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || 'Error ' + r.status); }
 
       // Get route metadata from headers
-      let route = {};
-      try { route = JSON.parse(r.headers.get('X-Route') || '{}'); } catch {}
+      let route = {}, promptMeta = null;
+      try { const hdr = JSON.parse(r.headers.get('X-Route') || '{}'); route = hdr; promptMeta = hdr.prompt || null; } catch {}
 
       // Check if streaming or cached
       const ct = r.headers.get('content-type') || '';
@@ -1225,6 +1234,14 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
         cb.textContent = '⚡ CACHED';
         metaWrap.appendChild(cb);
       }
+      // Few-shot indicator
+      if (promptMeta && promptMeta.few_shot_count > 0) {
+        const fs = document.createElement('span');
+        fs.className = 'route-badge deep';
+        fs.textContent = '✨ ' + promptMeta.few_shot_count + '-shot';
+        fs.title = 'Few-shot examples injected from past interactions';
+        metaWrap.appendChild(fs);
+      }
 
       const metaDetails = document.createElement('div');
       metaDetails.className = 'route-meta';
@@ -1454,10 +1471,26 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     pollLocalStatus();
     loadLocalModels();
     pollCacheStats();
+    loadPromptTemplates();
   };
 
   // Poll every 30 seconds
   setInterval(() => { if (token) pollLocalStatus(); }, 30000);
+
+  // --- Prompt Templates ---
+  async function loadPromptTemplates() {
+    try {
+      const r = await api('GET', '/v1/prompt/templates');
+      const sel = $('#sp-template-select');
+      if (!sel) return;
+      const current = sel.value;
+      sel.innerHTML = '<option value="">Auto (route-based)</option>';
+      for (const [name, _] of Object.entries(r.templates || {})) {
+        sel.innerHTML += `<option value="${name}">${name}</option>`;
+      }
+      sel.value = current;
+    } catch {}
+  }
 
   // --- History ---
   const historyModal = $('#history-modal');

@@ -321,7 +321,7 @@ async def chat_completions(request: Request):
     if body.get("stream"):
         return await _stream_chat(settings, reallog, dehydrator, rehydrator,
                                   upstream_messages, request_session_id, user_content, route,
-                                  endpoint, model_name, endpoint_type, api_key, t0)
+                                  endpoint, model_name, endpoint_type, api_key, t0, prompt_meta)
 
     # --- Draft redirect ---
     if endpoint_type == "draft":
@@ -676,7 +676,7 @@ async def elaborate(request: Request):
 
 async def _stream_chat(settings, reallog, dehydrator, rehydrator,
                        upstream_messages, session_id, user_content, route,
-                       endpoint, model_name, endpoint_type, api_key, t0):
+                       endpoint, model_name, endpoint_type, api_key, t0, prompt_meta=None):
     """Stream chat completion as Server-Sent Events."""
     from starlette.responses import StreamingResponse
     from datetime import datetime
@@ -731,6 +731,7 @@ async def _stream_chat(settings, reallog, dehydrator, rehydrator,
     route_meta = json.dumps({
         "action": route["action"], "reason": route.get("reason", ""),
         "target_model": model_name, "confidence": route.get("confidence", 0),
+        "prompt": prompt_meta,
     })
 
     return StreamingResponse(
@@ -1334,7 +1335,12 @@ async def prompt_preview(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Stats
+# ---------------------------------------------------------------------------
+
+async def stats(request: Request):
+    """GET /stats — return system statistics."""
     from starlette.responses import JSONResponse
     auth_err = authenticate(request)
     if auth_err is not None:
@@ -1358,6 +1364,83 @@ async def metrics_dashboard(request: Request):
     minutes = int(request.query_params.get("minutes", 60))
     from gateway.observability import MetricsCollector
     return JSONResponse(MetricsCollector.get_summary(minutes))
+
+
+# ---------------------------------------------------------------------------
+# Dataset Quality & Management
+# ---------------------------------------------------------------------------
+
+async def dataset_stats(request: Request):
+    """GET /v1/dataset/stats — dataset analytics, quality distribution, readiness."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    days = int(request.query_params.get("days", 90))
+    from vault.dataset_stats import get_dataset_stats
+    from gateway.deps import get_settings
+    return JSONResponse(get_dataset_stats(get_settings().db_path, days))
+
+
+async def dataset_score(request: Request):
+    """POST /v1/dataset/score — score a specific ranking interaction."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    interaction_id = body.get("interaction_id")
+    if not interaction_id:
+        return JSONResponse({"error": "interaction_id required"}, status_code=400)
+    reallog = get_reallog()
+    row = reallog.get_interaction(interaction_id)
+    if row is None:
+        return JSONResponse({"error": "interaction not found"}, status_code=404)
+    interaction = dict(row)
+    from vault.dataset_quality import score_ranking
+    score = score_ranking(interaction)
+    return JSONResponse(score.to_dict())
+
+
+async def dataset_export(request: Request):
+    """GET /v1/dataset/export — export with quality filter."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    min_quality = float(request.query_params.get("min_quality", "0.2"))
+    days = int(request.query_params.get("days", 90))
+    from gateway.deps import get_settings
+    from vault.training_pipeline import extract_ranking_data
+    from vault.dataset_quality import filter_by_quality
+    rankings = extract_ranking_data(get_settings().db_path, days)
+    filtered = filter_by_quality(rankings, min_composite=min_quality)
+    return JSONResponse({
+        "total": len(rankings),
+        "filtered": len(filtered),
+        "min_quality": min_quality,
+        "days": days,
+    })
+
+
+async def dataset_deduplicate(request: Request):
+    """POST /v1/dataset/deduplicate — run deduplication analysis."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    days = body.get("days", 90)
+    from gateway.deps import get_settings
+    from vault.dataset_manager import deduplicate_db
+    result = deduplicate_db(get_settings().db_path, days)
+    return JSONResponse(result)
 
 
 async def training_export(request: Request):
@@ -1600,6 +1683,122 @@ async def model_catalog(request: Request):
         })
 
     return JSONResponse({"catalog": catalog, "installed": installed})
+
+
+# ---------------------------------------------------------------------------
+# Model Discovery & Benchmarking
+# ---------------------------------------------------------------------------
+
+async def discovery_search(request: Request):
+    """GET /v1/discovery/search — search available models from OpenRouter."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    q = request.query_params.get("q", "")
+    capability = request.query_params.get("capability", "any")
+    max_price = request.query_params.get("max_price")
+    min_ctx = int(request.query_params.get("min_context", 0))
+    max_ctx = request.query_params.get("max_context")
+    limit = int(request.query_params.get("limit", 50))
+
+    from vault.model_discovery import ModelDiscovery
+    discovery = ModelDiscovery()
+
+    # Try loading from cache first (no network needed for search)
+    if not discovery._models:
+        discovery.load_from_file(discovery._cache_file)
+
+    max_price_f = float(max_price) if max_price else None
+    max_ctx_i = int(max_ctx) if max_ctx else None
+
+    results = discovery.search(
+        query=q, capability=capability,
+        max_prompt_price=max_price_f,
+        min_context=min_ctx, max_context=max_ctx_i,
+        limit=limit,
+    )
+    return JSONResponse({
+        "models": [m.to_dict() for m in results],
+        "total_loaded": len(discovery.list_models()),
+    })
+
+
+async def discovery_benchmark(request: Request):
+    """GET /v1/discovery/benchmark — run or show benchmarks for a model."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    model_id = request.query_params.get("model", "")
+    run_bench = request.query_params.get("run", "false").lower() == "true"
+    category = request.query_params.get("category", "code")
+
+    if not model_id:
+        return JSONResponse({"error": "model parameter required"}, status_code=400)
+
+    s = get_settings()
+
+    if run_bench:
+        import asyncio
+        from vault.benchmark import BenchmarkRunner
+        # Derive base_url from settings or use OpenRouter
+        base_url = "https://openrouter.ai/api/v1"
+        runner = BenchmarkRunner(
+            db_path=s.db_path,
+            api_key=s.api_key or "",
+            base_url=base_url,
+        )
+        try:
+            lat_result, qual_result = await asyncio.gather(
+                runner.run_latency_benchmark(model_id),
+                runner.run_quality_benchmark(model_id, category),
+            )
+            return JSONResponse({
+                "latency": lat_result.to_dict(),
+                "quality": qual_result.to_dict(),
+                "model_id": model_id,
+            })
+        finally:
+            runner.close()
+    else:
+        # Show history
+        from vault.benchmark import BenchmarkRunner
+        runner = BenchmarkRunner(db_path=s.db_path)
+        try:
+            history = runner.get_history(model_id)
+            return JSONResponse(history)
+        finally:
+            runner.close()
+
+
+async def discovery_compare(request: Request):
+    """POST /v1/discovery/compare — compare models for a task type."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    models = body.get("models", [])
+    task_type = body.get("task", "general")
+
+    if not models:
+        return JSONResponse({"error": "models list required"}, status_code=400)
+
+    from vault.model_comparator import ModelComparator
+    comparator = ModelComparator()
+    ranked = comparator.compare_models(models, task_type)
+    return JSONResponse({
+        "task_type": task_type,
+        "ranked": [s.to_dict() for s in ranked],
+    })
 
 
 async def model_download(request: Request):
