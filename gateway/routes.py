@@ -894,6 +894,16 @@ async def local_model_load(request: Request) -> JSONResponse:
     gpu_layers = body.get("gpu_layers", None)
     if gpu_layers is not None:
         _get_local_manager().gpu_layers = int(gpu_layers)
+    else:
+        # Auto-detect optimal GPU layers based on model size
+        from vault.gpu_utils import calculate_optimal_gpu_layers
+        all_models = _get_local_manager().list_models()
+        model_info = next((m for m in all_models if m["name"] == model_name), None)
+        if model_info:
+            optimal = calculate_optimal_gpu_layers(model_info["size_mb"], settings.local_ctx_size)
+            _get_local_manager().gpu_layers = optimal
+            logger.info("Auto-detected gpu_layers=%d for model %s (%dMB)",
+                       optimal, model_name, model_info["size_mb"])
     manager = _get_local_manager()
     if manager.load_model(model_name):
         info = manager.get_loaded_model_info()
