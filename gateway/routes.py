@@ -891,6 +891,9 @@ async def local_model_load(request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid json"}, status_code=400)
     if not model_name:
         return JSONResponse({"error": "model name required"}, status_code=400)
+    gpu_layers = body.get("gpu_layers", None)
+    if gpu_layers is not None:
+        _get_local_manager().gpu_layers = int(gpu_layers)
     manager = _get_local_manager()
     if manager.load_model(model_name):
         info = manager.get_loaded_model_info()
