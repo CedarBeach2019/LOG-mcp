@@ -1,203 +1,149 @@
-# 🚀 Quickstart — 5 Minutes to Your First PII Scrub
+# 🚀 Quickstart — 5 Minutes to Chat
 
-This guide walks you through getting LOG-mcp running, step by step. No prior experience with privacy tools needed.
+LOG-mcp is a privacy-first chat gateway that routes your messages between local and cloud LLMs, scrubs PII, and gives you control over every request.
 
 ## What you'll need
 
-- **Python 3.10 or later** — that's it. Check with:
-  ```bash
-  python3 --version
-  ```
-  If you don't have Python, install it from [python.org](https://www.python.org/downloads/).
-
-Pick **one** path below (Local, Cloudflare, or Docker) based on what you want to do.
+- **Docker** (easiest) — [get.docker.com](https://docs.docker.com/get-docker/)
+- **Or Python 3.10+** — check with `python3 --version`
 
 ---
 
-## Path 1: Local Install (Recommended for trying it out)
+## Option 1: Docker (Recommended)
 
-This runs everything on your machine. Fastest to set up, zero network dependencies.
+Three commands from clone to running.
 
 ### Step 1 — Clone the repo
 
 ```bash
-# This downloads the project code to your computer
 git clone https://github.com/CedarBeach2019/LOG-mcp.git
-
-# Move into the project directory
 cd LOG-mcp
 ```
 
-### Step 2 — Install
+### Step 2 — Configure environment
 
 ```bash
-# Install LOG-mcp and its dependencies into your Python environment
+cp docker/.env.example docker/.env
+```
+
+Edit `docker/.env` with your API key:
+
+```env
+LOG_API_KEY=sk-your-deepseek-key
+LOG_PASSPHRASE=your-secret-password
+```
+
+### Step 3 — Launch
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+```
+
+🎉 Open **http://localhost:8000** — log in with your passphrase and start chatting.
+
+---
+
+## Option 2: Python (No Docker)
+
+### Step 1 — Clone and install
+
+```bash
+git clone https://github.com/CedarBeach2019/LOG-mcp.git
+cd LOG-mcp
 pip install -e .
 ```
 
-> **What's happening?** `pip install` downloads the required libraries (HTTP client, CLI framework). The `-e` flag means "editable" — changes you make to the code take effect immediately without reinstalling.
+### Step 2 — Configure
 
-### Step 3 — Initialize your vault
+```bash
+export LOG_API_KEY=sk-your-deepseek-key
+export LOG_PASSPHRASE=your-secret-password
+```
+
+### Step 3 — Run
 
 ```bash
 log init
+log serve
 ```
 
-Expected output:
-```
-🪵 Initializing L.O.G. Vault...
-✅ Created directory structure:
-   /home/you/.log/vault/
-   /home/you/.log/vault/archives/{shorts,sessions,gnosis}
-✅ RealLog database initialized.
-```
-
-> **What's happening?** This creates a local SQLite database at `~/.log/vault/` that stores the mapping between anonymized tokens (like `ENTITY_1`) and real data. Your data never leaves your machine.
-
-### Step 4 — Scrub some PII
-
-```bash
-log dehydrate "Contact Dr. Sarah Chen at sarah.chen@hospital.org, phone 415-555-0199. Patient MRN: 1234567890123"
-```
-
-Expected output:
-```
-Dehydrated: "Contact ENTITY_1 at EMAIL_1, phone PHONE_1. Patient MRN: REDACTED_1"
-Session: sess_a1b2c3d4
-```
-
-> **What just happened?**
-> - `Dr. Sarah Chen` was detected as a name → replaced with `ENTITY_1`
-> - `sarah.chen@hospital.org` was detected as an email → replaced with `EMAIL_1`
-> - `415-555-0199` was detected as a phone number → replaced with `PHONE_1`
-> - The MRN was detected as a sensitive identifier → replaced with `REDACTED_1`
-> - The mapping is stored in your local vault under session `sess_a1b2c3d4`
-
-### Step 5 — Get the original back
-
-```bash
-log rehydrate sess_a1b2c3d4
-```
-
-Expected output:
-```
-Original: "Contact Dr. Sarah Chen at sarah.chen@hospital.org, phone 415-555-0199. Patient MRN: 1234567890123"
-```
-
-> **What's happening?** LOG-mcp looks up the session in your vault and reconstructs the original text. Only someone with access to your vault can do this — not the AI, not us, nobody.
-
-🎉 **You're done!** You just anonymized sensitive data and restored it. That's the core loop.
+🎉 Open **http://localhost:8000** — log in and chat.
 
 ---
 
-## Path 2: Cloudflare Workers (Serverless, Free)
+## First Session
 
-Best if you want a hosted API endpoint without managing a server. Free tier: 100k requests/day.
+1. **Open** http://localhost:8000 in your browser
+2. **Log in** with the passphrase you set in `LOG_PASSPHRASE`
+3. **Send a message** — type anything, e.g. `What is 2 + 2?`
+4. **Try draft mode** — type `/draft Write a haiku about debugging`
 
-### Step 1 — Fork the repo
-
-1. Go to [https://github.com/CedarBeach2019/LOG-mcp](https://github.com/CedarBeach2019/LOG-mcp)
-2. Click **Fork** (top-right) to copy it to your GitHub account
-
-### Step 2 — Install Cloudflare tools
-
-```bash
-# Install Node.js if you don't have it (from nodejs.org)
-npm install -g wrangler
-wrangler login
-```
-
-> **What's happening?** `wrangler` is Cloudflare's CLI tool. `wrangler login` opens your browser to authenticate with your Cloudflare account (free to create).
-
-### Step 3 — Deploy
-
-```bash
-cd cloudflare
-npm install
-npx wrangler deploy
-```
-
-Expected output:
-```
-✨ Successfully published your script to
-https://log-mcp-your-name.your-subdomain.workers.dev
-```
-
-### Step 4 — Test it
-
-```bash
-curl https://log-mcp-your-name.your-subdomain.workers.dev/dehydrate \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Email john@acme.com or call 555-1234"}'
-```
-
-Expected response:
-```json
-{
-  "dehydrated": "Email EMAIL_1 or call PHONE_1",
-  "session_id": "sess_x9y8z7"
-}
-```
-
-> **What just happened?** Your Worker received the text, stripped the PII, stored the mapping in a Cloudflare D1 database, and returned the anonymized version. The PII lives only in your D1 database — never in the AI's logs.
+The system auto-routes simple questions to a fast/cheap model and complex requests (code, analysis, long messages) to a reasoning model. You can override this with slash commands.
 
 ---
 
-## Path 3: Docker (Self-Hosted)
+## Slash Commands
 
-Best for air-gapped environments, on-prem deployments, or if you just love containers.
+| Command | What it does |
+|---------|-------------|
+| `/local` | Force routing to your local Ollama model |
+| `/cloud` | Use the cheap/fast cloud model |
+| `/reason` | Use the heavy reasoning model (DeepSeek-Reasoner) |
+| `/compare` | Run both cheap and reasoning models side-by-side |
+| `/draft` | Get multiple concise rewrites (precise, creative, deep) |
 
-### Step 1 — Build and run
+Example: `/reason Explain quantum entanglement to a 10-year-old`
 
-```bash
-docker build -t log-mcp https://github.com/CedarBeach2019/LOG-mcp.git
-docker run -p 8000:8000 -v log-vault:/data log-mcp
-```
+---
 
-Expected output:
-```
-🪵 LOG-mcp server starting on port 8000
-✅ Vault initialized at /data/vault/
-```
+## Environment Variables
 
-### Step 2 — Test it
+All settings use the `LOG_` prefix. Set them in your `.env` file or export directly.
 
-```bash
-curl http://localhost:8000/dehydrate \
-  -H "Content-Type: application/json" \
-  -d '{"text": "SSN 078-05-1120 belongs to Jane Public"}'
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_API_KEY` | *(none)* | Cloud LLM API key (DeepSeek, OpenAI, etc.) |
+| `LOG_PROVIDER_ENDPOINT` | DeepSeek chat endpoint | Main cloud model endpoint |
+| `LOG_PASSPHRASE` | `changeme` | Password for the chat UI login |
+| `LOG_LOCAL_PORT` | `8000` | Port for the web server |
+| `LOG_CHEAP_MODEL_ENDPOINT` | DeepSeek chat endpoint | Fast model endpoint |
+| `LOG_CHEAP_MODEL_NAME` | `deepseek-chat` | Fast model name |
+| `LOG_ESCALATION_MODEL_ENDPOINT` | DeepSeek chat endpoint | Reasoning model endpoint |
+| `LOG_ESCALATION_MODEL_NAME` | `deepseek-reasoner` | Reasoning model name |
+| `LOG_OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama server URL |
+| `LOG_ROUTER_MODEL` | `qwen3.5:2b` | Local routing/classification model |
+| `LOG_PRIVACY_MODE` | `true` | Enable PII scrubbing before sending to cloud |
+| `LOG_DRAFT_MODE` | `true` | Enable the `/draft` multi-rewrite feature |
+| `LOG_RATE_LIMIT` | `30` | Max requests per minute |
+| `LOG_DB_PATH` | `~/.log/vault/reallog.db` | SQLite vault location |
 
-Expected response:
-```json
-{
-  "dehydrated": "SSN SSN_1 belongs to ENTITY_1",
-  "session_id": "sess_d4e5f6"
-}
-```
+---
 
-> **What's happening?** The `-v log-vault:/data` flag creates a persistent volume so your vault data survives container restarts. The PII mapping is stored locally in the container's data directory.
+## Browser Access
+
+Once running, open **http://localhost:8000** in any browser. The chat UI supports:
+
+- Real-time streaming responses
+- Slash commands (type `/` to see options)
+- Message history (stored in your local vault)
 
 ---
 
 ## Troubleshooting
 
 | Problem | Solution |
-|---|---|
-| `log: command not found` | Run `pip install -e .` again. Make sure you're using the right Python (`which python3`). |
-| `ModuleNotFoundError` | You're probably in the wrong directory. `cd LOG-mcp` first, then retry. |
-| `wrangler login` doesn't open a browser | Run `wrangler login` with the `--browser` flag: `wrangler login --browser manual`. It'll give you a URL to paste. |
-| Docker build fails | Ensure Docker is running (`docker info`). If on ARM (Mac M1/M2), the build should work — the image is multi-platform. |
-| PII not being detected | Check that your input matches common formats. Names require capitalized first/last names (e.g., "Jane Smith", not "jane smith"). |
+|---------|----------|
+| Can't reach localhost:8000 | Check Docker is running: `docker ps`. Verify the port isn't in use. |
+| `log: command not found` | Run `pip install -e .` and ensure your Python bin is in `$PATH`. |
+| Local model errors | Install Ollama and pull a model: `ollama pull qwen3.5:2b` |
+| Cloud model errors | Check `LOG_API_KEY` is set and valid. |
 
 ---
 
 ## Next Steps
 
-Now that you're running:
-
-- 📖 **[README.md](README.md)** — Full feature overview, all deployment modes, CLI reference
-- 🔌 **[MCP Integration](README.md#mcp-integration)** — Use LOG-mcp with Claude Desktop, Cursor, or any MCP client
-- 🤖 **[Scout Connectors](README.md#deployment-modes)** — Send anonymized text directly to Claude, GPT, or DeepSeek
-- 🗺️ **[Roadmap](ROADMAP.md)** — See what's planned (batch processing, UI dashboard, more PII types)
-- 🤝 **[Contributing](CONTRIBUTING.md)** — Add features, fix bugs, improve detection patterns
+- 📖 **[README.md](README.md)** — Full feature overview and architecture
+- 🔌 **[MCP Integration](README.md#mcp-integration)** — Use with Claude Desktop, Cursor, or any MCP client
+- 🔒 **[Privacy](README.md#privacy)** — How PII scrubbing and the vault work
+- 🗺️ **[Roadmap](ROADMAP.md)** — What's planned next
+- 🤝 **[Contributing](CONTRIBUTING.md)** — Bug reports, features, PRs welcome
