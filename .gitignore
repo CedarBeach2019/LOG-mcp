@@ -48,3 +48,4 @@ vault/archives/
 *.db-wal
 *.db-shm
 .wrangler/
+.aider*

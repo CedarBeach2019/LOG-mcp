@@ -83,8 +83,8 @@ class TestCLI:
     def test_dehydrate_pipe(self):
         result = self._cli('dehydrate', input_text='Email fresh-test@unique-cli.com and call 555-123-4567')
         assert result.returncode == 0
-        assert '<EMAIL_' in result.stdout
-        assert '<PHONE_' in result.stdout
+        assert '[EMAIL_' in result.stdout
+        assert '[PHONE_' in result.stdout
         assert 'fresh-test@unique-cli.com' not in result.stdout
 
     def test_dehydrate_json(self):
@@ -99,11 +99,11 @@ class TestCLI:
         assert 'test@cli.com' not in result.stdout
 
     def test_rehydrate_pipe(self):
-        result = self._cli('rehydrate', input_text='Contact <EMAIL_1> at <PHONE_1>')
+        result = self._cli('rehydrate', input_text='Contact [EMAIL_1> at [PHONE_1>')
         assert result.returncode == 0
 
     def test_rehydrate_args(self):
-        result = self._cli('rehydrate', 'Send to <EMAIL_1>')
+        result = self._cli('rehydrate', 'Send to [EMAIL_1>')
         assert result.returncode == 0
 
     def test_status(self):

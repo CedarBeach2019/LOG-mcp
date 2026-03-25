@@ -9,7 +9,7 @@ from typing import Optional, List, Tuple, Any, Dict
 logger = logging.getLogger(__name__)
 
 # Current database version
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 
 class RealLogDB:
     """Manage SQLite database schema and migrations."""
@@ -107,6 +107,15 @@ class RealLogDB:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_sessions_created 
                 ON sessions (created_at)
+            """)
+        elif version == 2:
+            # Create user_preferences table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
             """)
             
     def check_connection(self) -> bool:

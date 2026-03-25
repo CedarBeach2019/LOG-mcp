@@ -1,5 +1,5 @@
 """
-L.O.G. Vault — Local privacy engine.
+L.O.G. Vault - Local privacy engine.
 
 Core dehydration/rehydration logic with SQLite-backed RealLog.
 """
@@ -35,7 +35,7 @@ class PIIEntity:
     real_value: str
     created_at: str = ""
     last_used: str = ""
-    
+
     @property
     def log_id(self) -> str:
         """Alias for entity_id for backward compatibility."""
@@ -63,11 +63,11 @@ class Message:
 
 class DatabaseConnection:
     """Context manager for SQLite connections with error handling."""
-    
+
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.conn: Optional[sqlite3.Connection] = None
-    
+
     def __enter__(self) -> sqlite3.Connection:
         try:
             self.conn = sqlite3.connect(self.db_path)
@@ -76,7 +76,7 @@ class DatabaseConnection:
         except sqlite3.Error as e:
             logger.error(f"Database connection error: {e}")
             raise
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn:
             if exc_type is not None:
@@ -88,15 +88,19 @@ class DatabaseConnection:
 
 class RealLog:
     """SQLite-backed storage for sessions, messages, and PII mappings."""
-    
-    def __init__(self, db_path: str | Path = "~/.log/vault/reallog.db"):
-        self.db_path = Path(db_path).expanduser()
+
+    def __init__(self, db_path: str | Path = "~/.log/vault/reallog.db", settings=None):
+        if settings is not None:
+            self.db_path = Path(settings.db_path).expanduser()
+        else:
+            self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = __import__('threading').Lock()
+        self.settings = settings
         # Create a persistent connection
         self._conn = None
         self._init_db()
-    
+
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create a persistent database connection."""
         if self._conn is None:
@@ -105,13 +109,13 @@ class RealLog:
             # Enable foreign keys
             self._conn.execute("PRAGMA foreign_keys = ON")
         return self._conn
-    
+
     def close(self):
         """Close the persistent connection."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
-    
+
     def _init_db(self):
         """Initialize database tables."""
         conn = self._get_connection()
@@ -142,7 +146,7 @@ class RealLog:
             CREATE INDEX IF NOT EXISTS idx_pii_value ON pii_map(real_value);
         """)
         conn.commit()
-    
+
     def add_session(self, session: Session) -> None:
         """Add a new session."""
         conn = self._get_connection()
@@ -151,7 +155,7 @@ class RealLog:
             (session.id, session.timestamp, session.summary, json.dumps(session.metadata))
         )
         conn.commit()
-    
+
     def add_message(self, message: Message) -> int:
         """Add a message and return its id."""
         with DatabaseConnection(self.db_path) as conn:
@@ -160,7 +164,7 @@ class RealLog:
                 (message.session_id, message.role, message.content, message.timestamp)
             )
             return cursor.lastrowid
-    
+
     def get_session(self, session_id: str) -> Optional[Session]:
         """Retrieve a session by id."""
         with DatabaseConnection(self.db_path) as conn:
@@ -176,7 +180,7 @@ class RealLog:
                     metadata=json.loads(row['metadata'])
                 )
         return None
-    
+
     def get_session_messages(self, session_id: str) -> List[Message]:
         """Get all messages for a session."""
         with DatabaseConnection(self.db_path) as conn:
@@ -193,7 +197,7 @@ class RealLog:
                     timestamp=row['timestamp']
                 ) for row in rows
             ]
-    
+
     def get_all_sessions(self, limit: int = 100) -> List[Session]:
         """Get all sessions ordered by timestamp."""
         with DatabaseConnection(self.db_path) as conn:
@@ -209,7 +213,7 @@ class RealLog:
                     metadata=json.loads(row['metadata'])
                 ) for row in rows
             ]
-    
+
     # Add missing methods for compatibility
     def get_storage_stats(self) -> dict:
         """Get storage statistics."""
@@ -217,7 +221,7 @@ class RealLog:
             entities = conn.execute("SELECT COUNT(*) FROM pii_map").fetchone()[0]
             sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
             messages = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-            
+
             return {
                 "entities": entities,
                 "sessions": sessions,
@@ -225,13 +229,13 @@ class RealLog:
                 "archives": 0,  # Placeholder
                 "by_tier": {"hot": sessions, "warm": 0, "cold": 0, "ice": 0}
             }
-    
+
     def db_size_mb(self) -> float:
         """Get database size in MB."""
         if self.db_path.exists():
             return self.db_path.stat().st_size / (1024 * 1024)
         return 0.0
-    
+
     def promote_session(self, session_id: str, tier: MemoryTier) -> None:
         """Promote a session to a different memory tier."""
         # Update session metadata to include tier information
@@ -244,7 +248,7 @@ class RealLog:
                     "UPDATE sessions SET metadata = ? WHERE id = ?",
                     (json.dumps(metadata), session_id)
                 )
-    
+
     def get_sessions(self, tier: MemoryTier, limit: int = 100) -> List[Session]:
         """Get sessions by tier."""
         sessions = []
@@ -263,7 +267,7 @@ class RealLog:
                         metadata=metadata
                     ))
         return sessions
-    
+
     def all_entities(self):
         """Get all PII entities."""
         with DatabaseConnection(self.db_path) as conn:
@@ -279,7 +283,7 @@ class RealLog:
                     last_used=row['last_used']
                 ) for row in rows
             ]
-    
+
     def register_entity(self, entity: PIIEntity) -> None:
         """Register a PII entity."""
         with DatabaseConnection(self.db_path) as conn:
@@ -287,7 +291,7 @@ class RealLog:
                 "INSERT OR REPLACE INTO pii_map (entity_id, entity_type, real_value, created_at, last_used) VALUES (?, ?, ?, ?, ?)",
                 (entity.entity_id, entity.entity_type, entity.real_value, entity.created_at, entity.last_used)
             )
-    
+
     def next_log_id(self, entity_type: str) -> str:
         """Generate next log ID for an entity type."""
         with DatabaseConnection(self.db_path) as conn:
@@ -295,7 +299,7 @@ class RealLog:
                 "SELECT COUNT(*) FROM pii_map WHERE entity_type = ?",
                 (entity_type,)
             ).fetchone()[0]
-        
+
         type_prefix = {
             'person': 'ENTITY',
             'email': 'EMAIL',
@@ -305,15 +309,16 @@ class RealLog:
             'credit_card': 'CC',
             'api_key': 'KEY'
         }.get(entity_type, 'ENT')
-        
+
         return f"{type_prefix}_{count + 1}"
 
 
 class Dehydrator:
-    """Detect and replace PII with LOG_ID placeholders."""
-    
-    def __init__(self, reallog: RealLog):
+    """Detect and replace PII with typed bracket placeholders."""
+
+    def __init__(self, reallog: RealLog, settings=None):
         self.reallog = reallog
+        self.settings = settings
         self.patterns = {
             'email': r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b',
             'phone': r'\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
@@ -321,15 +326,29 @@ class Dehydrator:
             'credit_card': r'\b(?:\d{4}[- ]?){3}\d{4}\b',
             'api_key': r'\b(?:sk|pk|token|key|secret|api[_-]?key)[-_][a-zA-Z0-9_\-]{16,}\b',
         }
-    
+
     def detect_entities(self, text: str) -> List[Tuple[str, str]]:
         """Detect PII entities in text using regex patterns."""
+
+    @staticmethod
+    def build_preamble() -> str:
+        """Build the coherence preamble explaining entity tokens to the LLM."""
+        return (
+            "Some personal information in this conversation has been replaced with tokens for privacy. "
+            "Tokens follow the format [TYPE_LETTER]. For example, [PERSON_A] refers to a specific "
+            "person whose name is not provided. [EMAIL_B] refers to a specific email address. "
+            "Treat each token as a unique, consistent entity throughout the conversation - the same "
+            "token always refers to the same real entity. Respond naturally as if you know who these "
+            "entities are, but never try to guess or fabricate their real values."
+        )
+
+    def detect_entities(self, text: str) -> List[Tuple[str, str]]:
         entities = []
-        
+
         for entity_type, pattern in self.patterns.items():
             for match in re.finditer(pattern, text, re.IGNORECASE):
                 entities.append((entity_type, match.group()))
-        
+
         # Improved name detection
         # First pass: find all 2-3 word sequences of capitalized words
         common_non_names = {
@@ -355,12 +374,12 @@ class Dehydrator:
             'Know', 'Think', 'Want', 'Need', 'Help', 'Try', 'Use', 'See',
         }
         titles = {'Mr', 'Mrs', 'Ms', 'Miss', 'Dr', 'Prof', 'Sir', 'Madam'}
-        
+
         # Match sequences of 2-3 capitalized words
         name_pattern = r'(?<![A-Za-z])([A-Z][a-z]{1,15})(?:\s+([A-Z][a-z]{1,15})){1,2}(?![A-Za-z])'
         for match in re.finditer(name_pattern, text):
             words = match.group().split()
-            
+
             # Skip if ALL words are in common_non_names or titles
             clean_words = [w for w in words if w.rstrip('.') not in common_non_names and w.rstrip('.') not in titles]
             if len(clean_words) >= 2:
@@ -369,14 +388,14 @@ class Dehydrator:
                 if not any(w in common_non_names for w in clean_words):
                     entities.append(('person', clean_name))
                 elif len(clean_words) >= 2:
-                    # At least 2 non-common words — likely a real name
+                    # At least 2 non-common words - likely a real name
                     entities.append(('person', clean_name))
-        
+
         # Address detection (simple)
         address_pattern = r'\b\d+\s+[A-Z][a-z]+\s+(?:Street|St|Avenue|Ave|Road|Rd|Lane|Ln|Boulevard|Blvd|Drive|Dr|Court|Ct)\b'
         for match in re.finditer(address_pattern, text, re.IGNORECASE):
             entities.append(('address', match.group()))
-        
+
         # Passport number detection
         passport_patterns = [
             r'\b[A-Z][0-9]{8}\b',  # Standard format
@@ -385,32 +404,32 @@ class Dehydrator:
         for pattern in passport_patterns:
             for match in re.finditer(pattern, text):
                 entities.append(('passport', match.group()))
-        
+
         # Non-ASCII support
         # Chinese phone numbers
         chinese_phone_pattern = r'\b1[3-9]\d{9}\b'
         for match in re.finditer(chinese_phone_pattern, text):
             entities.append(('phone', match.group()))
-        
+
         # Russian names (Cyrillic)
         russian_name_pattern = r'\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?\b'
         for match in re.finditer(russian_name_pattern, text):
             entities.append(('person', match.group()))
-        
+
         # Chinese names (2-3 Han characters)
         chinese_name_pattern = r'[\u4e00-\u9fff]{2,3}'
         # To avoid matching random Chinese characters, we'll look for patterns that suggest names
         # This is a simple approach - in practice, more context would be needed
         # We'll look for sequences of 2-3 Han characters that are standalone or preceded/followed by common markers
-        chinese_context_pattern = r'(?:姓名|名字|称呼|为)[:：]?\s*([\u4e00-\u9fff]{2,3})|([\u4e00-\u9fff]{2,3})(?:先生|女士|小姐|老师)'
+        chinese_context_pattern = r'(?:姓名|名字|称呼|为)[::]?\s*([\u4e00-\u9fff]{2,3})|([\u4e00-\u9fff]{2,3})(?:先生|女士|小姐|老师)'
         for match in re.finditer(chinese_context_pattern, text):
             for group_num in range(1, 3):
                 if match.group(group_num):
                     entities.append(('person', match.group(group_num)))
                     break
-        
+
         return entities
-    
+
     def dehydrate(self, text: str, *, use_llm: bool = False) -> Tuple[str, List[PIIEntity]]:
         """Replace detected PII with LOG_ID placeholders.
 
@@ -438,7 +457,7 @@ class Dehydrator:
 
         processed_entities = []
         result = text
-        
+
         for entity_type, real_value in entities:
             # Check if entity already exists in database
             existing = self._get_entity_by_value(real_value)
@@ -457,10 +476,10 @@ class Dehydrator:
                 pii_entity = self._store_entity(pii_entity)
                 entity_id = pii_entity.entity_id
                 processed_entities.append(pii_entity)
-            
+
             # Replace in text
-            result = result.replace(real_value, f"<{entity_id}>")
-        
+            result = result.replace(real_value, f"[{entity_id}]")
+
         return result, processed_entities
 
     @staticmethod
@@ -473,7 +492,7 @@ class Dehydrator:
             "other": "person",
         }
         return mapping.get(llm_type.lower(), "person")
-    
+
     def _get_entity_by_value(self, real_value: str) -> Optional[PIIEntity]:
         """Retrieve entity by its real value."""
         conn = self.reallog._get_connection()
@@ -490,28 +509,42 @@ class Dehydrator:
                 last_used=row['last_used']
             )
         return None
-    
+
     def _generate_entity_id(self, entity_type: str) -> str:
-        """Generate a unique entity ID using MAX+1 for thread safety."""
+        """Generate a unique entity ID using letter+counter (e.g., EMAIL_A, PERSON_B)."""
         type_prefix = {
-            'person': 'ENTITY',
+            'person': 'PERSON',
             'email': 'EMAIL',
             'phone': 'PHONE',
-            'address': 'ADDR',
+            'address': 'ADDRESS',
             'ssn': 'SSN',
             'credit_card': 'CC',
             'api_key': 'KEY'
-        }.get(entity_type, 'ENT')
-        
+        }.get(entity_type, 'ENTITY')
+        return self._next_letter_id(type_prefix)
+
+    def _next_letter_id(self, prefix: str) -> str:
+        """Get next letter-suffixed ID for a prefix (A, B, ..., Z, AA, AB, ...)."""
+        prefix = prefix.upper()
         with DatabaseConnection(self.reallog.db_path) as conn:
-            row = conn.execute(
-                "SELECT MAX(CAST(SUBSTR(entity_id, ?) AS INTEGER)) FROM pii_map WHERE entity_type = ?",
-                (len(type_prefix) + 2, entity_type,)  # +2 for underscore position
-            ).fetchone()[0]
-            count = row if row is not None else 0
-        
-        return f"{type_prefix}_{count + 1}"
-    
+            # Get all existing entity_ids for this prefix
+            rows = conn.execute(
+                "SELECT entity_id FROM pii_map WHERE entity_id LIKE ?",
+                (f"{prefix}_%",)
+            ).fetchall()
+            letters = set()
+            for row in rows:
+                eid = row[0]
+                suffix = eid[len(prefix) + 1:]  # after prefix_
+                if len(suffix) == 1 and suffix.isalpha():
+                    letters.add(suffix.upper())
+            # Find first unused letter
+            for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                if c not in letters:
+                    return f"{prefix}_{c}"
+            # Fallback: use AA, AB, etc.
+            return f"{prefix}_AA"  # Simple fallback for now
+
     def _store_entity(self, entity: PIIEntity) -> PIIEntity:
         """Thread-safe check-and-insert for PII entities."""
         with self.reallog._lock:
@@ -534,26 +567,17 @@ class Dehydrator:
                         (datetime.now().isoformat(), existing.entity_id)
                     )
                     return existing
-                
+
                 # Generate ID
-                type_prefix = {
-                    'person': 'ENTITY', 'email': 'EMAIL', 'phone': 'PHONE',
-                    'address': 'ADDR', 'ssn': 'SSN', 'credit_card': 'CC', 'api_key': 'KEY'
-                }.get(entity.entity_type, 'ENT')
-                
-                row = conn.execute(
-                    "SELECT MAX(CAST(SUBSTR(entity_id, ?) AS INTEGER)) FROM pii_map WHERE entity_type = ?",
-                    (len(type_prefix) + 2, entity.entity_type,)
-                ).fetchone()[0]
-                count = row if row is not None else 0
-                entity.entity_id = f"{type_prefix}_{count + 1}"
-                
+                entity_id = self._next_letter_id(entity.entity_type or 'ENTITY')
+                entity.entity_id = entity_id
+
                 conn.execute(
                     "INSERT INTO pii_map (entity_id, entity_type, real_value, created_at, last_used) VALUES (?, ?, ?, ?, ?)",
                     (entity.entity_id, entity.entity_type, entity.real_value, entity.created_at, entity.last_used)
                 )
                 return entity
-    
+
     def _update_last_used(self, entity_id: str) -> None:
         """Update the last_used timestamp for an entity."""
         with DatabaseConnection(self.reallog.db_path) as conn:
@@ -565,27 +589,27 @@ class Dehydrator:
 
 class Rehydrator:
     """Swap LOG_ID placeholders back to real values."""
-    
+
     def __init__(self, reallog: RealLog):
         self.reallog = reallog
-    
+
     def rehydrate(self, text: str) -> str:
-        """Replace all LOG_ID placeholders with their real values."""
-        # Find all placeholders in the text
-        placeholders = re.findall(r'<([A-Z_]+_\d+)>', text)
+        """Replace all bracket placeholders with their real values."""
+        # Find all placeholders in the text: [EMAIL_A], [PERSON_B], etc.
+        placeholders = re.findall(r'\[([A-Z]+_[A-Z]+)\]', text)
         result = text
-        
+
         for placeholder in placeholders:
             entity = self._get_entity_by_id(placeholder)
             if entity:
-                result = result.replace(f"<{placeholder}>", entity.real_value)
+                result = result.replace(f"[{placeholder}]", entity.real_value)
                 # Update last_used
                 self._update_last_used(placeholder)
             else:
                 logger.warning(f"Unknown entity ID: {placeholder}")
-        
+
         return result
-    
+
     def _get_entity_by_id(self, entity_id: str) -> Optional[PIIEntity]:
         """Retrieve entity by its ID."""
         with DatabaseConnection(self.reallog.db_path) as conn:
@@ -602,7 +626,7 @@ class Rehydrator:
                     last_used=row['last_used']
                 )
         return None
-    
+
     def _update_last_used(self, entity_id: str) -> None:
         """Update the last_used timestamp for an entity."""
         with DatabaseConnection(self.reallog.db_path) as conn:
