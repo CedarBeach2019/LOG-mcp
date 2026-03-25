@@ -88,6 +88,17 @@ class TestPIIDetection:
         cards = [e for e in entities if e.entity_type == "credit_card"]
         assert len(cards) == 2
 
+    def test_credit_card_not_phone(self, dehydrator):
+        """Credit card numbers should not be partially matched as phone numbers."""
+        text = "card 4111222233334444"
+        dehydrated, entities = dehydrator.dehydrate(text)
+        phones = [e for e in entities if e.entity_type == "phone"]
+        cards = [e for e in entities if e.entity_type == "credit_card"]
+        assert len(cards) == 1, f"Expected 1 credit card, got {len(cards)}"
+        assert len(phones) == 0, f"Credit card matched as phone: {phones}"
+        assert "CC_1" in dehydrated, f"Expected CC_1 in dehydrated text, got: {dehydrated}"
+        assert "PHONE" not in dehydrated, f"PHONE found in dehydrated text: {dehydrated}"
+
     def test_api_key(self, dehydrator):
         keys = [
             "sk-abc123def456ghi789jkl0mno",

@@ -40,9 +40,9 @@ const NAME_REGEX = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
 
 const PII_PATTERNS = [
   { type: 'EMAIL', regex: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g },
-  { type: 'PHONE', regex: /(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g },
   { type: 'SSN', regex: /\b\d{3}-\d{2}-\d{4}\b/g },
   { type: 'CC', regex: /\b(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|3[47]\d{13}|6(?:011|5\d{2})\d{12})\b/g },
+  { type: 'PHONE', regex: /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g },
   { type: 'API_KEY', regex: /\b(?:sk|pk|api[_-]?key|secret)[_-][a-zA-Z0-9]{20,}\b/gi },
   { type: 'ADDRESS', regex: /\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Drive|Dr|Lane|Ln|Road|Rd|Court|Ct)\b(?:[.,]?\s*[\w\s]+)?(?:\d{5})?/gi },
   { type: 'IPV4', regex: /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g },
