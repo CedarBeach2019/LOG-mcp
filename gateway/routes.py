@@ -288,34 +288,40 @@ async def chat_completions(request: Request):
     escalation_latency = None
 
     if endpoint_type == "local":
-        backend = get_local_manager().get_backend()
-        if backend is None or not backend.is_loaded:
-            logger.warning("Local model not loaded, falling back to cloud")
-            endpoint_type = "cheap"
-            endpoint = settings.cheap_model_endpoint
-            model_name = settings.cheap_model_name
-        else:
+        manager = get_local_manager()
+        backend = manager.get_backend()
+        subprocess_client = manager.get_subprocess_client()
+
+        if subprocess_client and subprocess_client.is_loaded:
+            local_content = await subprocess_client.agenerate(
+                upstream_messages, temperature=0.7,
+                max_tokens=getattr(settings, 'local_max_tokens', 512),
+            )
+        elif backend and backend.is_loaded:
             local_content = await backend.agenerate(
                 upstream_messages, temperature=0.7,
                 max_tokens=getattr(settings, 'local_max_tokens', 512),
             )
+        else:
+            logger.warning("Local model not loaded, falling back to cloud")
+            endpoint_type = "cheap"
+            endpoint = settings.cheap_model_endpoint
+            model_name = settings.cheap_model_name
+        # If local inference succeeded, process the result
+        if endpoint_type == "local" and local_content:
             latency = int((time.time() - t0) * 1000)
-            if local_content:
-                rehydrated = rehydrator.rehydrate(local_content)
-                reallog.store_interaction(
-                    user_input=user_content, model_response=local_content,
-                    model_name="local", route_action="LOCAL", latency_ms=latency,
-                )
-                return JSONResponse({
-                    "choices": [{"message": {"role": "assistant", "content": rehydrated}}],
-                    "model": "local",
-                    "route": {"action": "local", "confidence": 1.0, "badge": "🔵 LOCAL"},
-                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-                    "latency_ms": latency,
-                })
-            else:
-                logger.warning("Local inference failed, falling back to cloud")
-                endpoint_type = "cheap"
+            rehydrated = rehydrator.rehydrate(local_content)
+            reallog.store_interaction(
+                user_input=user_content, model_response=local_content,
+                model_name="local", route_action="LOCAL", latency_ms=latency,
+            )
+            return JSONResponse({
+                "choices": [{"message": {"role": "assistant", "content": rehydrated}}],
+                "model": "local",
+                "route": {"action": "local", "confidence": 1.0, "badge": "🔵 LOCAL"},
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "latency_ms": latency,
+            })
 
     if endpoint_type == "compare":
         cheap_status, cheap_data, cheap_err = await call_model(

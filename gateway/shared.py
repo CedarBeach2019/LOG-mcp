@@ -105,5 +105,17 @@ def get_local_manager():
     if _local_manager is None:
         from vault.model_manager import ModelManager
         s = get_settings()
-        _local_manager = ModelManager(s.local_models_dir, s.local_gpu_layers, s.local_ctx_size)
+        use_subprocess = s.local_use_subprocess or _is_jetson()
+        _local_manager = ModelManager(
+            s.local_models_dir, s.local_gpu_layers, s.local_ctx_size,
+            use_subprocess=use_subprocess,
+        )
     return _local_manager
+
+
+def _is_jetson() -> bool:
+    """Detect Jetson platform for auto-enabling subprocess mode."""
+    try:
+        return Path("/etc/nv_tegra_release").exists() or Path("/sys/module/tegra_fuse").exists()
+    except Exception:
+        return False

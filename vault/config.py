@@ -29,6 +29,7 @@ class VaultSettings(BaseSettings):
     local_gpu_layers: int = 20  # GPU layers (20 fits in 8GB with KV cache; -1 for all)
     local_max_tokens: int = 512
     local_ctx_size: int = 4096
+    local_use_subprocess: bool = False  # set True on memory-constrained devices (Jetson)
 
     # Profiles
     custom_profiles_path: Path = Path.home() / ".log" / "vault" / "profiles.json"
