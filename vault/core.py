@@ -54,11 +54,11 @@ class Session:
 @dataclass
 class Message:
     """A single message in a session."""
-    id: int
-    session_id: str
-    role: str
-    content: str
-    timestamp: str
+    id: int | None = None
+    session_id: str = ""
+    role: str = ""
+    content: str = ""
+    timestamp: str = ""
 
 
 class DatabaseConnection:

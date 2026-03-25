@@ -153,6 +153,27 @@ async def chat_completions(request: Request):
             user_content = msg.get("content", "")
             break
 
+    # --- Session handling ---
+    request_session_id = body.get("session_id", "")
+    if not request_session_id:
+        request_session_id = "s_" + str(int(time.time()))
+    # Create session if it doesn't exist
+    from datetime import datetime
+    from vault.core import Session, Message
+    existing = reallog.get_session(request_session_id)
+    if not existing:
+        reallog.add_session(Session(
+            id=request_session_id,
+            timestamp=datetime.now().isoformat(),
+            summary="",
+            metadata={},
+        ))
+    # Store user message
+    reallog.add_message(Message(
+        session_id=request_session_id, role="user",
+        content=user_content, timestamp=datetime.now().isoformat(),
+    ))
+
     # --- PII dehydration ---
     t0 = time.time()
     dehydrator = Dehydrator(reallog=reallog)
@@ -285,15 +306,19 @@ async def chat_completions(request: Request):
         escalation_response = rehydrator.rehydrate(escalation_response)
 
     # --- Store interaction ---
-    session_id = "session_" + str(int(time.time()))
     interaction_id = reallog.add_interaction(
-        session_id=session_id, user_input=user_content,
+        session_id=request_session_id, user_input=user_content,
         route_action=route["action"], route_reason=route.get("reason", ""),
         target_model=route.get("target_model", model_name),
         response=response_text, escalation_response=escalation_response,
         response_latency_ms=route.get("response_latency_ms", int((time.time() - t0) * 1000)),
         escalation_latency_ms=escalation_latency,
     )
+    # Store assistant response in session
+    reallog.add_message(Message(
+        session_id=request_session_id, role="assistant",
+        content=response_text, timestamp=datetime.now().isoformat(),
+    ))
 
     # --- Store in semantic cache ---
     if getattr(settings, 'cache_enabled', True) and endpoint_type != "compare":
@@ -310,6 +335,7 @@ async def chat_completions(request: Request):
             "confidence": route.get("confidence", 0),
         },
         "interaction_id": interaction_id,
+        "session_id": request_session_id,
     }
     if escalation_response:
         result["escalation_response"] = escalation_response
@@ -832,6 +858,94 @@ async def cache_clear(request: Request):
         model = None
     cache.clear(model)
     return JSONResponse({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Sessions (conversation history)
+# ---------------------------------------------------------------------------
+
+async def sessions_list(request: Request):
+    """GET /v1/sessions — list recent sessions."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    limit = int(request.query_params.get("limit", 50))
+    reallog = get_reallog()
+    sessions = reallog.get_all_sessions(limit)
+    result = []
+    for s in sessions:
+        result.append({
+            "id": s.id,
+            "timestamp": s.timestamp,
+            "summary": s.summary,
+            "metadata": s.metadata,
+        })
+    return JSONResponse({"sessions": result})
+
+
+async def session_get(request: Request):
+    """GET /v1/sessions/{session_id} — get a session with messages."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    session_id = request.path_params.get("session_id", "")
+    if not session_id:
+        return JSONResponse({"error": "session_id required"}, status_code=400)
+    reallog = get_reallog()
+    session = reallog.get_session(session_id)
+    if not session:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    messages = reallog.get_session_messages(session_id)
+    return JSONResponse({
+        "id": session.id,
+        "timestamp": session.timestamp,
+        "summary": session.summary,
+        "messages": [{"role": m.role, "content": m.content, "timestamp": m.timestamp} for m in messages],
+    })
+
+
+async def session_create(request: Request):
+    """POST /v1/sessions — create a new session."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reallog = get_reallog()
+    from datetime import datetime
+    from vault.core import Session
+    import uuid
+    session_id = body.get("id", str(uuid.uuid4())[:8])
+    session = Session(
+        id=session_id,
+        timestamp=datetime.now().isoformat(),
+        summary=body.get("summary", ""),
+        metadata=body.get("metadata", {}),
+    )
+    reallog.add_session(session)
+    return JSONResponse({"id": session.id, "created": True})
+
+
+async def session_delete(request: Request):
+    """DELETE /v1/sessions/{session_id} — delete a session and its messages."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    session_id = request.path_params.get("session_id", "")
+    if not session_id:
+        return JSONResponse({"error": "session_id required"}, status_code=400)
+    reallog = get_reallog()
+    conn = reallog._get_connection()
+    conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+    conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    return JSONResponse({"ok": True, "id": session_id})
 
 
 # ---------------------------------------------------------------------------
