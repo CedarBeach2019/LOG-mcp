@@ -247,6 +247,39 @@ async def chat_completions(request: Request):
                                   upstream_messages, request_session_id, user_content, route,
                                   endpoint, model_name, endpoint_type, api_key, t0)
 
+    # --- Draft redirect ---
+    if endpoint_type == "draft":
+        profiles = body.get("profiles") or get_draft_profiles(settings)
+        dehydrated_messages_2 = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if isinstance(content, str) and role in ("user", "system"):
+                content, _ = dehydrator.dehydrate(content)
+            dehydrated_messages_2.append({"role": role, "content": content})
+        coros = [_call_draft_profile(settings, api_key, p, dehydrated_messages_2) for p in profiles]
+        import asyncio
+        results = list(await asyncio.gather(*coros))
+        for r in results:
+            if r["response"] is not None:
+                r["response"] = rehydrator.rehydrate(r["response"])
+        session_id_draft = "s_" + str(int(time.time()))
+        for r in results:
+            reallog.add_interaction(
+                session_id=session_id_draft, user_input=user_content,
+                route_action="DRAFT", route_reason=f"profile={r['profile']}",
+                target_model=r["model"],
+                response=r["response"] or f"[error: {r['error']}]",
+                response_latency_ms=r["latency_ms"],
+            )
+        latency = int((time.time() - t0) * 1000)
+        return JSONResponse({
+            "drafts": results,
+            "route": {"action": "draft", "target_model": "multiple"},
+            "interaction_id": None,
+            "latency_ms": latency,
+        })
+
     # --- Call model(s) ---
     escalation_response = None
     escalation_latency = None

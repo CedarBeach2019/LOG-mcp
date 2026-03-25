@@ -772,6 +772,14 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
           addMessage('assistant', data.escalation_response);
           chatHistory.push({ role: 'assistant', content: data.escalation_response });
         }
+        if (data.drafts && data.drafts.length > 0) {
+          // Draft mode triggered via /draft prefix
+          drafts = data.drafts;
+          draftRanking = [];
+          draftInteractionId = data.interaction_id || null;
+          renderDrafts();
+          scrollDown();
+        }
       }
     } catch (e) {
       statusEl.textContent = 'Error: ' + e.message;
