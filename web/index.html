@@ -605,4 +605,28 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 
   function scrollDown() { requestAnimationFrame(() => { els.messages.scrollTop = els.messages.scrollHeight; }); }
 
-  // ─
+  function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  function fmtMd(text) {
+    let h = esc(text);
+    h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+      return '<div class="code-block"><div class="code-header"><span>' + (lang || 'code') + '</span><button onclick="navigator.clipboard.writeText(decodeURIComponent(\'' + encodeURIComponent(code.trim()) + '\'));this.textContent=\'Copied!\'">Copy</button></div><pre><code class="block-code">' + code.trim() + '</code></pre></div>';
+    });
+    h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+    h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    h = h.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+    h = h.replace(/(?<!")\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    h = h.replace(/(?<!["(])(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    h = h.replace(/\n\n/g, '</p><p>');
+    h = h.replace(/\n/g, '<br>');
+    h = '<p>' + h + '</p>';
+    h = h.replace(/<p><\/p>/g, '');
+    return h;
+  }
+
+  if (token) showChat();
+  else els.passphrase.focus();
+})();
+</script>
+</body>
+</html>
