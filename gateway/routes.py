@@ -1306,3 +1306,122 @@ async def training_status(request: Request):
             else "Good amount of data — run export pipeline to generate training files"
         ),
     })
+
+
+async def config_get(request: Request):
+    """GET /v1/config — view current runtime configuration (masked secrets)."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    s = get_settings()
+    config = {
+        "cheap_model_endpoint": s.cheap_model_endpoint,
+        "cheap_model_name": s.cheap_model_name,
+        "escalation_model_endpoint": s.escalation_model_endpoint,
+        "escalation_model_name": s.escalation_model_name,
+        "api_key": s.api_key[:8] + "..." if s.api_key else None,
+        "privacy_mode": s.privacy_mode,
+        "cache_enabled": s.cache_enabled,
+        "cache_similarity_threshold": s.cache_similarity_threshold,
+        "cache_max_entries": s.cache_max_entries,
+        "cache_ttl_hours": s.cache_ttl_hours,
+        "local_gpu_layers": s.local_gpu_layers,
+        "local_max_tokens": s.local_max_tokens,
+        "local_ctx_size": s.local_ctx_size,
+        "local_use_subprocess": s.local_use_subprocess,
+        "draft_mode": s.draft_mode,
+        "instant_send": s.instant_send,
+        "cors_origins": s.cors_origins,
+    }
+    return JSONResponse(config)
+
+
+async def config_set(request: Request):
+    """PUT /v1/config — update runtime configuration (no restart needed).
+
+    Only allows safe changes: privacy_mode, cache settings, local model settings,
+    draft_mode, instant_send. Cannot change API keys or endpoints (security).
+    """
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    s = get_settings()
+    # Allowed fields for runtime update
+    allowed = {
+        "privacy_mode": bool,
+        "cache_enabled": bool,
+        "cache_similarity_threshold": float,
+        "cache_max_entries": int,
+        "cache_ttl_hours": int,
+        "local_gpu_layers": int,
+        "local_max_tokens": int,
+        "local_ctx_size": int,
+        "draft_mode": bool,
+        "instant_send": bool,
+        "cors_origins": str,
+    }
+
+    updated = []
+    errors = []
+    for key, value in body.items():
+        if key not in allowed:
+            errors.append(f"{key} is not updatable at runtime")
+            continue
+        try:
+            value = allowed[key](value)
+            setattr(s, key, value)
+            updated.append(key)
+        except (ValueError, TypeError) as exc:
+            errors.append(f"{key}: {exc}")
+
+    # Clear cache if cache settings changed
+    if any(k.startswith("cache_") for k in updated):
+        try:
+            from vault.semantic_cache import _cache_instance
+            if _cache_instance is not None:
+                _cache_instance.invalidate_all()
+        except Exception:
+            pass
+
+    return JSONResponse({
+        "updated": updated,
+        "errors": errors,
+    })
+
+
+async def config_validate(request: Request):
+    """POST /v1/config/validate — validate a config change without applying it."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    warnings = []
+    if "cache_similarity_threshold" in body:
+        v = body["cache_similarity_threshold"]
+        if not 0.0 < v <= 1.0:
+            warnings.append(f"cache_similarity_threshold {v} out of range (0, 1]")
+    if "local_gpu_layers" in body:
+        v = body["local_gpu_layers"]
+        if v < -1:
+            warnings.append("local_gpu_layers must be >= -1")
+    if "local_max_tokens" in body:
+        v = body["local_max_tokens"]
+        if v < 1:
+            warnings.append("local_max_tokens must be >= 1")
+
+    return JSONResponse({"valid": len(warnings) == 0, "warnings": warnings})

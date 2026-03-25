@@ -10,6 +10,9 @@ from gateway.routes import (
     cache_clear,
     cache_stats,
     chat_completions,
+    config_get,
+    config_set,
+    config_validate,
     drafts,
     elaborate,
     feedback,
@@ -82,6 +85,9 @@ routes = [
     Route("/v1/metrics", metrics_dashboard, methods=["GET"]),
     Route("/v1/training/export", training_export, methods=["POST"]),
     Route("/v1/training/status", training_status, methods=["GET"]),
+    Route("/v1/config", config_get, methods=["GET"]),
+    Route("/v1/config", config_set, methods=["PUT"]),
+    Route("/v1/config/validate", config_validate, methods=["POST"]),
 ]
 
 

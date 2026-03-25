@@ -156,6 +156,10 @@ class SemanticCache:
         self._hits = 0
         self._misses = 0
 
+    def invalidate_all(self) -> None:
+        """Alias for clear()."""
+        self.clear()
+
     def stats(self) -> dict:
         """Cache statistics."""
         total = self._hits + self._misses
