@@ -41,6 +41,12 @@ from gateway.routes import (
 )
 
 from gateway.tracing import TracingMiddleware
+from gateway.startup import validate_startup
+
+# Startup validation
+from gateway.deps import get_settings
+_settings = get_settings()
+_startup_warnings = validate_startup(_settings)
 
 routes = [
     Route("/", serve_index, methods=["GET"]),
@@ -78,12 +84,51 @@ routes = [
     Route("/v1/training/status", training_status, methods=["GET"]),
 ]
 
-app = Starlette(routes=routes)
+
+async def _on_shutdown():
+    """Graceful shutdown: stop model subprocess, flush metrics."""
+    import logging
+    logger = logging.getLogger("gateway.shutdown")
+    logger.info("Shutting down...")
+
+    # Stop model subprocess (frees GPU memory)
+    try:
+        from gateway.shared import get_local_manager
+        manager = get_local_manager()
+        manager.unload()
+        logger.info("Model unloaded")
+    except Exception as exc:
+        logger.warning("Error unloading model: %s", exc)
+
+    # Flush metrics summary
+    try:
+        from gateway.observability import MetricsCollector
+        summary = MetricsCollector.get_summary(minutes=5)
+        total = summary.get("total_requests", 0)
+        logger.info("Final metrics: %d requests in last 5min", total)
+    except Exception:
+        pass
+
+    logger.info("Shutdown complete")
+
+
+async def _not_found(request, exc):
+    from starlette.responses import JSONResponse
+    return JSONResponse({"error": "not found", "path": request.url.path}, status_code=404)
+
+
+async def _method_not_allowed(request, exc):
+    from starlette.responses import JSONResponse
+    return JSONResponse({"error": "method not allowed", "method": request.method}, status_code=405)
+
+
+app = Starlette(routes=routes, on_shutdown=[_on_shutdown],
+                 exception_handlers={404: _not_found, 405: _method_not_allowed})
 
 app.add_middleware(TracingMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_settings.cors_origins.split(",") if _settings.cors_origins != "*" else ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

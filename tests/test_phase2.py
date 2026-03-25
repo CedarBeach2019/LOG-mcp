@@ -190,7 +190,7 @@ class TestPreferences:
 class TestHealth:
     def test_health_returns_json(self, client):
         resp = client.get("/v1/health")
-        # May fail to connect to real services, but should return JSON
-        assert resp.status_code == 200
         data = resp.json()
-        assert "ollama" in data
+        assert "status" in data
+        assert "checks" in data
+        assert "database" in data["checks"]

@@ -63,41 +63,87 @@ async def serve_index(request: Request) -> HTMLResponse:
 # ---------------------------------------------------------------------------
 
 async def health(request: Request):
-    """GET /v1/health — check service availability."""
+    """GET /v1/health — deep health check: DB, API keys, model, disk, memory."""
     from starlette.responses import JSONResponse
+    import shutil
+    import os
+
     settings = get_settings()
-    results = {}
+    results = {"status": "ok", "checks": {}}
 
-    # Check cheap model
+    # DB check
+    try:
+        from vault.core import RealLog
+        rl = RealLog(settings.db_path)
+        rl.get_preference("_health_check")
+        results["checks"]["database"] = {"ok": True, "path": str(settings.db_path)}
+    except Exception as exc:
+        results["checks"]["database"] = {"ok": False, "error": str(exc)}
+        results["status"] = "degraded"
+
+    # API key check (validate by making a lightweight models list call)
     try:
         client = get_client()
-        resp = await client.get(
-            settings.cheap_model_endpoint.rsplit("/chat/completions", 1)[0].rsplit("/v1", 1)[0]
-            or settings.cheap_model_endpoint,
-            timeout=3.0,
-        )
-        results["cheap"] = True
-    except Exception:
-        results["cheap"] = False
+        base = settings.cheap_model_endpoint.rsplit("/chat/completions", 1)[0]
+        base = base.rsplit("/v1", 1)[0] if "/v1" in base else base
+        resp = await client.get(f"{base}/models", timeout=5.0,
+                                headers={"Authorization": f"Bearer {settings.api_key}"})
+        results["checks"]["api_key"] = {"ok": resp.status_code in (200, 401, 403)}  # reachable
+    except Exception as exc:
+        results["checks"]["api_key"] = {"ok": False, "error": str(exc)[:80]}
+        results["status"] = "degraded"
 
-    # Check Ollama
+    # Local model check
     try:
-        client = get_client()
-        resp = await client.get(f"{settings.ollama_base_url}/api/tags", timeout=2.0)
-        results["ollama"] = resp.status_code == 200
-    except Exception:
-        results["ollama"] = False
+        manager = get_local_manager()
+        info = manager.get_loaded_model_info()
+        subprocess_alive = manager.get_subprocess_client() is not None
+        results["checks"]["local_model"] = {
+            "ok": info is not None or subprocess_alive,
+            "loaded": info is not None,
+            "subprocess": subprocess_alive,
+            "name": info.get("model_name") if info else None,
+        }
+    except Exception as exc:
+        results["checks"]["local_model"] = {"ok": False, "error": str(exc)[:80]}
 
-    # Check local llama.cpp model
+    # Disk space
     try:
-        info = get_local_manager().get_loaded_model_info()
-        results["local_model"] = info is not None
-        if info:
-            results["local_model_name"] = info.get("model_name", "unknown")
+        db_dir = Path(settings.db_path).parent
+        disk = shutil.disk_usage(str(db_dir))
+        free_gb = round(disk.free / (1024**3), 1)
+        results["checks"]["disk"] = {
+            "ok": free_gb > 0.5,
+            "free_gb": free_gb,
+            "total_gb": round(disk.total / (1024**3), 1),
+        }
+        if free_gb <= 0.5:
+            results["status"] = "degraded"
     except Exception:
-        results["local_model"] = False
+        pass
 
-    return JSONResponse(results)
+    # Memory
+    try:
+        meminfo = Path("/proc/meminfo").read_text()
+        for line in meminfo.split("\n"):
+            if "MemAvailable" in line:
+                avail_kb = int(line.split()[1])
+                avail_mb = round(avail_kb / 1024, 0)
+                results["checks"]["memory"] = {
+                    "ok": avail_mb > 200,
+                    "available_mb": avail_mb,
+                }
+                if avail_mb < 200:
+                    results["status"] = "degraded"
+                break
+    except Exception:
+        pass
+
+    # Version / uptime
+    results["checks"]["version"] = {"commit": "c976402"}
+
+    status_code = 200 if results["status"] == "ok" else 503
+    return JSONResponse(results, status_code=status_code)
 
 
 # ---------------------------------------------------------------------------

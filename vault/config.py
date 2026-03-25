@@ -39,6 +39,9 @@ class VaultSettings(BaseSettings):
     parallel_mode: bool = False
     privacy_mode: bool = True
     draft_mode: bool = True  # enable draft round feature
+
+    # Server
+    cors_origins: str = "*"  # comma-separated, "*" for all
     rate_limit: int = 30
     max_body_bytes: int = 10240
 

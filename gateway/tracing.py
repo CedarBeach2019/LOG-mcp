@@ -19,9 +19,21 @@ class TracingMiddleware(BaseHTTPMiddleware):
         t0 = time.monotonic()
         trace_id = f"{id(request):x}"[:8]
 
-        # Add trace ID to request state for access in handlers
         request.state.trace_id = trace_id
         request.state.start_time = t0
+
+        # Rate limit on chat endpoint
+        if "/v1/chat/completions" in request.url.path and request.method == "POST":
+            from gateway.rate_limit import get_limiter
+            client_ip = request.client.host if request.client else "unknown"
+            allowed, info = get_limiter().check(client_ip)
+            if not allowed:
+                from starlette.responses import JSONResponse
+                return JSONResponse(
+                    {"error": "Rate limit exceeded", "detail": info},
+                    status_code=429,
+                    headers={"Retry-After": str(int(info.get("reset_at", 0) - time.monotonic()) + 1)},
+                )
 
         logger.info("[%s] → %s %s", trace_id, request.method, request.url.path)
 
