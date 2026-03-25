@@ -32,6 +32,7 @@ from gateway.routes import (
     session_delete,
     session_get,
     sessions_list,
+    metrics_dashboard,
     stats,
 )
 

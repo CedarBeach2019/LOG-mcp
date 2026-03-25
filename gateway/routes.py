@@ -1176,3 +1176,14 @@ async def stats(request: Request):
         "thumbs_up": conn.execute("SELECT COUNT(*) AS n FROM interactions WHERE feedback='up'").fetchone()["n"],
         "thumbs_down": conn.execute("SELECT COUNT(*) AS n FROM interactions WHERE feedback='down'").fetchone()["n"],
     })
+
+
+async def metrics_dashboard(request: Request):
+    """GET /v1/metrics — observability dashboard data."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    minutes = int(request.query_params.get("minutes", 60))
+    from gateway.observability import MetricsCollector
+    return JSONResponse(MetricsCollector.get_summary(minutes))
