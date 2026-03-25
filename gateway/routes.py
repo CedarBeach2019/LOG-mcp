@@ -210,6 +210,8 @@ async def chat_completions(request: Request) -> JSONResponse:
             # Fallback to cloud cheap model
             logger.warning("Local model not loaded, falling back to cloud")
             endpoint_type = "cheap"
+            endpoint = settings.cheap_model_endpoint
+            model_name = settings.cheap_model_name
         else:
             local_content = await backend.agenerate(
                 upstream_messages,
@@ -219,7 +221,7 @@ async def chat_completions(request: Request) -> JSONResponse:
             latency = int((time.time() - t0) * 1000)
             if local_content:
                 # Rehydrate
-                rehydrated, _ = rehydrator.rehydrate(local_content)
+                rehydrated = rehydrator.rehydrate(local_content)
                 # Store interaction
                 reallog.store_interaction(
                     user_input=user_content, model_response=local_content,
@@ -588,7 +590,10 @@ async def preferences_list(request: Request) -> JSONResponse:
     if auth_err is not None:
         return auth_err
     reallog = get_reallog()
-    return JSONResponse(reallog.get_preferences())
+    prefs = reallog.get_preferences()
+    # Never leak internal secrets in the API response
+    prefs.pop("jwt_secret", None)
+    return JSONResponse(prefs)
 
 
 async def preferences_set(request: Request) -> JSONResponse:
