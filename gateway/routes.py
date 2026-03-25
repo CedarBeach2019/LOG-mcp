@@ -64,9 +64,13 @@ async def login(request: Request) -> JSONResponse:
 
 
 async def _call_model(endpoint: str, api_key: str, model: str,
-                      messages: list[dict], timeout: float = 60.0) -> tuple[int, dict | None, str]:
+                      messages: list[dict], timeout: float = 60.0,
+                      temperature: float | None = None) -> tuple[int, dict | None, str]:
     """Call an OpenAI-compatible API. Returns (status_code, json_data, error_str)."""
     try:
+        body = {"model": model, "messages": messages}
+        if temperature is not None:
+            body["temperature"] = temperature
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 endpoint,
@@ -74,7 +78,7 @@ async def _call_model(endpoint: str, api_key: str, model: str,
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json={"model": model, "messages": messages},
+                json=body,
                 timeout=timeout,
             )
         if resp.status_code != 200:
@@ -228,38 +232,27 @@ async def _call_draft_profile(settings, api_key: str, profile: dict,
     """Call a single draft profile. Returns result dict (never raises)."""
     t0 = time.time()
     name = profile["name"]
-    # New-style: endpoint and model directly on profile
     if "endpoint" in profile and "model" in profile:
         endpoint = profile["endpoint"]
         model = profile["model"]
     else:
-        # Legacy: resolve via settings attribute keys
         endpoint = getattr(settings, profile["endpoint_key"], "")
         model = getattr(settings, profile["model_key"], "")
     system_msg = {"role": "system", "content": profile.get("system_prompt", profile.get("system", ""))}
-    body = {"model": model, "messages": [system_msg] + messages}
-    if "temperature" in profile:
-        body["temperature"] = profile["temperature"]
 
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                endpoint,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=body,
-                timeout=30.0,
-            )
-        latency = int((time.time() - t0) * 1000)
-        if resp.status_code == 200:
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"]
-            return {"profile": name, "response": content, "model": model, "latency_ms": latency, "error": None}
-        return {"profile": name, "response": None, "model": model, "latency_ms": latency,
-                "error": f"upstream {resp.status_code}"}
-    except Exception as exc:
-        latency = int((time.time() - t0) * 1000)
-        return {"profile": name, "response": None, "model": model, "latency_ms": latency,
-                "error": str(exc)}
+    # Reuse _call_model for consistent HTTP behavior (single httpx client path)
+    status, data, err = await _call_model(
+        endpoint, api_key, model,
+        [system_msg] + messages,
+        temperature=profile.get("temperature"),
+    )
+    latency = int((time.time() - t0) * 1000)
+
+    if status == 200 and data and "choices" in data:
+        content = data["choices"][0]["message"]["content"]
+        return {"profile": name, "response": content, "model": model, "latency_ms": latency, "error": None}
+    return {"profile": name, "response": None, "model": model, "latency_ms": latency,
+            "error": err or f"upstream {status}"}
 
 
 async def drafts(request: Request) -> JSONResponse:

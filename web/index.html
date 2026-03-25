@@ -59,16 +59,51 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .sp-section h3{font-size:13px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px}
 .pf-item{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--surface-2);border-radius:8px;margin-bottom:6px}
 .pf-key{font-size:13px;font-weight:500;color:var(--accent);min-width:90px;word-break:break-all}
-.pf-val{flex:1;font-size:13px;color:var(--text);cursor:pointer;padding:4px 8px;border-radius:4px;min-height:24px;transition:background .15s}
-.pf-val:hover{background:rgba(255,255,255,.05)}
-.pf-edit{flex:1;padding:4px 8px;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--text);font-size:13px;font-family:var(--font);outline:none}
-.pf-del{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;opacity:.5;transition:all .15s;padding:2px}
-.pf-del:hover{opacity:1;color:var(--error)}
+.pf-val{flex:1;font-size:13px;color:var(--text);padding:4px 8px;border-radius:4px;min-height:24px}
 .sp-add{width:100%;padding:10px;margin-top:6px;background:rgba(124,92,255,.1);border:1px dashed rgba(124,92,255,.3);color:var(--accent);border-radius:8px;cursor:pointer;font-size:13px;font-family:var(--font);transition:all .2s}
 .sp-add:hover{background:rgba(124,92,255,.15);border-color:var(--accent)}
 .rt-item{padding:8px 12px;background:var(--surface-2);border-radius:8px;margin-bottom:6px;font-size:13px}
 .rt-item .rt-label{font-weight:500;color:var(--text);margin-bottom:2px}
 .rt-item .rt-desc{color:var(--text-muted);font-size:12px}
+/* Privacy toggle in settings */
+.sp-toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--surface-2);border-radius:10px}
+.sp-toggle-label{font-size:14px;color:var(--text);display:flex;align-items:center;gap:8px}
+.sp-toggle{width:44px;height:24px;border-radius:12px;background:var(--border);border:none;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0}
+.sp-toggle.on{background:var(--success)}
+.sp-toggle::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .2s}
+.sp-toggle.on::after{transform:translateX(20px)}
+/* Profile pills */
+.profile-pill{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--surface-2);border-radius:8px;margin-bottom:6px;transition:background .15s}
+.profile-pill:hover{background:#1e1e2e}
+.profile-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.profile-dot.precise{background:#60a5fa}
+.profile-dot.creative{background:#44dd88}
+.profile-dot.deep{background:#a855f7}
+.profile-dot.custom{background:#ffaa32}
+.profile-dot.fast{background:#ffaa32}
+.profile-info{flex:1;min-width:0}
+.profile-name{font-size:13px;font-weight:600;color:var(--text);text-transform:capitalize}
+.profile-meta{font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.profile-del{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;opacity:.4;transition:all .15s;padding:2px 4px;border-radius:4px;line-height:1}
+.profile-del:hover{opacity:1;color:var(--error);background:rgba(255,68,102,.1)}
+/* Add profile form */
+.sp-form{display:none;padding:14px;background:var(--surface-2);border-radius:10px;margin-bottom:8px;border:1px solid var(--border)}
+.sp-form.visible{display:block}
+.sp-form-row{margin-bottom:10px}
+.sp-form-row:last-child{margin-bottom:0}
+.sp-form-label{font-size:12px;color:var(--text-muted);margin-bottom:4px;display:block}
+.sp-form-input{width:100%;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border-color .2s}
+.sp-form-input:focus{border-color:var(--accent)}
+.sp-form-input.error{border-color:var(--error)}
+.sp-form-textarea{width:100%;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;resize:vertical;min-height:48px;transition:border-color .2s}
+.sp-form-textarea:focus{border-color:var(--accent)}
+.sp-form-actions{display:flex;gap:8px;margin-top:12px}
+.sp-form-actions button{flex:1;padding:8px;border-radius:6px;font-size:13px;font-family:var(--font);cursor:pointer;border:none;transition:all .15s}
+.sp-form-save{background:var(--accent);color:#fff}
+.sp-form-save:hover{background:var(--accent-dim)}
+.sp-form-cancel{background:var(--bg);color:var(--text-muted);border:1px solid var(--border)!important}
+.sp-form-cancel:hover{color:var(--text)}
+.sp-form-error{color:var(--error);font-size:12px;margin-top:6px}
 
 /* Messages */
 #messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:8px;scroll-behavior:smooth}
@@ -238,7 +273,30 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 <div id="settings-panel">
   <div class="sp-header"><h2>Settings</h2><button class="sp-close" id="settings-close">✕</button></div>
   <div class="sp-body">
-    <div class="sp-section"><h3>Preferences</h3><div id="prefs-list"></div><button class="sp-add" id="prefs-add">+ Add preference</button></div>
+    <div class="sp-section"><h3>Privacy</h3>
+      <div class="sp-toggle-row">
+        <span class="sp-toggle-label"><span id="sp-privacy-icon">🔒</span> Privacy mode</span>
+        <button class="sp-toggle" id="sp-privacy-toggle"></button>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:8px;padding:0 4px">When on, messages are processed locally and not stored externally.</div>
+    </div>
+    <div class="sp-section"><h3>Profiles</h3>
+      <div id="profiles-list"></div>
+      <button class="sp-add" id="profiles-add">+ Add custom profile</button>
+      <div class="sp-form" id="profile-form">
+        <div class="sp-form-row"><label class="sp-form-label">Name (lowercase alphanumeric)</label><input class="sp-form-input" id="pf-name" placeholder="e.g. my-profile" autocomplete="off"></div>
+        <div class="sp-form-row"><label class="sp-form-label">Endpoint</label><input class="sp-form-input" id="pf-endpoint" placeholder="https://api.example.com/v1"></div>
+        <div class="sp-form-row"><label class="sp-form-label">Model</label><input class="sp-form-input" id="pf-model" placeholder="gpt-4o-mini"></div>
+        <div class="sp-form-row"><label class="sp-form-label">Temperature</label><input class="sp-form-input" id="pf-temp" type="number" min="0" max="2" step="0.1" value="0.7"></div>
+        <div class="sp-form-row"><label class="sp-form-label">System prompt</label><textarea class="sp-form-textarea" id="pf-system" rows="2" placeholder="Optional system instructions…"></textarea></div>
+        <div class="sp-form-error" id="pf-error"></div>
+        <div class="sp-form-actions"><button class="sp-form-save" id="pf-save">Save</button><button class="sp-form-cancel" id="pf-cancel">Cancel</button></div>
+      </div>
+    </div>
+    <div class="sp-section"><h3>Preferences</h3>
+      <div id="prefs-list"></div>
+      <div id="prefs-empty" style="color:var(--text-muted);font-size:13px;display:none">No preferences learned yet. Use feedback (👍👎) to teach the system.</div>
+    </div>
     <div class="sp-section"><h3>Routing</h3><div id="routing-info"></div></div>
   </div>
 </div>
@@ -267,7 +325,13 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     privacyBtn: $('#privacy-btn'), settingsBtn: $('#settings-btn'),
     settingsPanel: $('#settings-panel'), settingsOverlay: $('#settings-overlay'),
     settingsClose: $('#settings-close'), prefsList: $('#prefs-list'),
-    prefsAdd: $('#prefs-add'), routingInfo: $('#routing-info'),
+    routingInfo: $('#routing-info'),
+    profilesList: $('#profiles-list'), profilesAdd: $('#profiles-add'),
+    profileForm: $('#profile-form'), pfName: $('#pf-name'), pfEndpoint: $('#pf-endpoint'),
+    pfModel: $('#pf-model'), pfTemp: $('#pf-temp'), pfSystem: $('#pf-system'),
+    pfSave: $('#pf-save'), pfCancel: $('#pf-cancel'), pfError: $('#pf-error'),
+    spPrivacyToggle: $('#sp-privacy-toggle'), spPrivacyIcon: $('#sp-privacy-icon'),
+    prefsEmpty: $('#prefs-empty'),
     draftBtn: $('#draft-btn'),
   };
 
@@ -295,6 +359,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   function openSettings() {
     els.settingsPanel.classList.add('open');
     els.settingsOverlay.classList.add('open');
+    syncPrivacyToggle();
+    loadProfiles();
     loadPrefs();
     loadRouting();
   }
@@ -319,92 +385,178 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     return r;
   }
 
+  // ── Privacy toggle in settings ──
+  function syncPrivacyToggle() {
+    els.spPrivacyToggle.classList.toggle('on', privacyMode);
+    els.spPrivacyIcon.textContent = privacyMode ? '🔒' : '🔓';
+  }
+  els.spPrivacyToggle.addEventListener('click', () => {
+    privacyMode = !privacyMode;
+    localStorage.setItem('privacy_mode', privacyMode ? 'on' : 'off');
+    updatePrivacy();
+    syncPrivacyToggle();
+  });
+
+  // ── Profiles ──
+  const PROFILE_COLORS = { precise: 'precise', creative: 'creative', deep: 'deep', fast: 'fast' };
+  function getProfileColorClass(name) {
+    return PROFILE_COLORS[name] || 'custom';
+  }
+
+  async function loadProfiles() {
+    try {
+      const r = await api('GET', '/v1/profiles');
+      if (!r.ok) return;
+      const { profiles } = await r.json();
+      els.profilesList.innerHTML = '';
+      profiles.forEach(p => {
+        const pill = document.createElement('div');
+        pill.className = 'profile-pill';
+
+        const dot = document.createElement('div');
+        dot.className = 'profile-dot ' + getProfileColorClass(p.name);
+
+        const info = document.createElement('div');
+        info.className = 'profile-info';
+        info.innerHTML = '<div class="profile-name">' + esc(p.name) + (p.is_default ? ' <span style="font-size:10px;color:var(--text-muted);font-weight:400;text-transform:none">(default)</span>' : '') + '</div>'
+          + '<div class="profile-meta">' + esc(p.model || '?') + ' · temp ' + (p.temperature != null ? p.temperature : '?') + '</div>';
+
+        pill.append(dot, info);
+
+        if (!p.is_default) {
+          const del = document.createElement('button');
+          del.className = 'profile-del';
+          del.textContent = '✕';
+          del.title = 'Delete profile';
+          del.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!confirm('Delete profile "' + p.name + '"?')) return;
+            try {
+              const dr = await api('DELETE', '/v1/profiles/' + encodeURIComponent(p.name));
+              if (dr.ok) loadProfiles();
+            } catch {}
+          });
+          pill.appendChild(del);
+        }
+
+        els.profilesList.appendChild(pill);
+      });
+    } catch (e) { console.error('loadProfiles', e); }
+  }
+
+  els.profilesAdd.addEventListener('click', () => {
+    els.profileForm.classList.add('visible');
+    els.profilesAdd.style.display = 'none';
+    // Pre-fill with info from the first profile's endpoint/model if available
+    els.pfName.value = '';
+    els.pfEndpoint.value = '';
+    els.pfModel.value = '';
+    els.pfTemp.value = '0.7';
+    els.pfSystem.value = '';
+    els.pfError.textContent = '';
+    // Try to grab default endpoint/model from existing profiles
+    const firstPill = els.profilesList.querySelector('.profile-pill');
+    if (firstPill) {
+      const meta = firstPill.querySelector('.profile-meta')?.textContent || '';
+      // We'll fetch profiles again to get endpoint info
+      api('GET', '/v1/profiles').then(r => r.json()).then(({ profiles }) => {
+        if (profiles.length) {
+          const ref = profiles.find(p => p.name === 'deep') || profiles[0];
+          if (ref.endpoint) els.pfEndpoint.value = ref.endpoint;
+          if (ref.model) els.pfModel.value = ref.model;
+        }
+      }).catch(() => {});
+    }
+    els.pfName.focus();
+  });
+
+  els.pfCancel.addEventListener('click', closeProfileForm);
+  function closeProfileForm() {
+    els.profileForm.classList.remove('visible');
+    els.profilesAdd.style.display = '';
+  }
+
+  els.pfSave.addEventListener('click', async () => {
+    const name = els.pfName.value.trim().toLowerCase();
+    const endpoint = els.pfEndpoint.value.trim();
+    const model = els.pfModel.value.trim();
+    const temp = parseFloat(els.pfTemp.value);
+    const system = els.pfSystem.value.trim();
+
+    // Validate
+    if (!name || !/^[a-z0-9][a-z0-9_-]*$/.test(name)) {
+      els.pfName.classList.add('error');
+      els.pfError.textContent = 'Name must be lowercase alphanumeric (a-z, 0-9, -, _)';
+      els.pfName.focus();
+      return;
+    }
+    if (!endpoint) {
+      els.pfEndpoint.classList.add('error');
+      els.pfError.textContent = 'Endpoint is required';
+      els.pfEndpoint.focus();
+      return;
+    }
+    if (!model) {
+      els.pfModel.classList.add('error');
+      els.pfError.textContent = 'Model is required';
+      els.pfModel.focus();
+      return;
+    }
+
+    els.pfError.textContent = '';
+    els.pfSave.disabled = true;
+    els.pfSave.textContent = 'Saving…';
+
+    const body = { name, endpoint, model };
+    if (!isNaN(temp) && temp >= 0 && temp <= 2) body.temperature = temp;
+    if (system) body.system_prompt = system;
+
+    try {
+      const r = await api('POST', '/v1/profiles', body);
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        els.pfError.textContent = err.error || 'Failed to save profile';
+        return;
+      }
+      closeProfileForm();
+      loadProfiles();
+    } catch (e) {
+      els.pfError.textContent = 'Network error';
+    } finally {
+      els.pfSave.disabled = false;
+      els.pfSave.textContent = 'Save';
+    }
+  });
+
+  // Clear error styling on input
+  [els.pfName, els.pfEndpoint, els.pfModel].forEach(el => {
+    el.addEventListener('input', () => { el.classList.remove('error'); els.pfError.textContent = ''; });
+  });
+  els.pfName.addEventListener('keydown', e => { if (e.key === 'Enter') els.pfEndpoint.focus(); });
+
+  // ── Preferences (read-only) ──
   async function loadPrefs() {
     try {
       const r = await api('GET', '/v1/preferences');
       if (!r.ok) return;
       const prefs = await r.json();
       els.prefsList.innerHTML = '';
+      const entries = Object.entries(prefs);
+      els.prefsEmpty.style.display = entries.length ? 'none' : 'block';
       for (const [k, v] of Object.entries(prefs)) {
-        els.prefsList.appendChild(makePrefItem(k, String(v)));
+        const item = document.createElement('div');
+        item.className = 'pf-item';
+        const keyEl = document.createElement('span');
+        keyEl.className = 'pf-key';
+        keyEl.textContent = k;
+        const valEl = document.createElement('span');
+        valEl.className = 'pf-val';
+        valEl.textContent = String(v);
+        item.append(keyEl, valEl);
+        els.prefsList.appendChild(item);
       }
     } catch (e) { console.error('loadPrefs', e); }
   }
-
-  function makePrefItem(key, value) {
-    const item = document.createElement('div');
-    item.className = 'pf-item';
-
-    const keyEl = document.createElement('span');
-    keyEl.className = 'pf-key';
-    keyEl.textContent = key;
-
-    const valEl = document.createElement('span');
-    valEl.className = 'pf-val';
-    valEl.textContent = value;
-    valEl.title = 'Click to edit';
-
-    function startEdit() {
-      const inp = document.createElement('input');
-      inp.className = 'pf-edit';
-      inp.value = value;
-      valEl.replaceWith(inp);
-      inp.focus();
-      inp.select();
-      let saved = false;
-      const finish = async () => {
-        if (saved) return;
-        saved = true;
-        const nv = inp.value.trim();
-        if (nv && nv !== value) {
-          try { await api('PUT', '/v1/preferences', { key, value: nv }); } catch {}
-        }
-        loadPrefs();
-      };
-      inp.addEventListener('keydown', e => { if (e.key === 'Enter') finish(); if (e.key === 'Escape') finish(); });
-      inp.addEventListener('blur', finish);
-    }
-    valEl.addEventListener('click', startEdit);
-
-    const del = document.createElement('button');
-    del.className = 'pf-del';
-    del.textContent = '✕';
-    del.title = 'Delete';
-    del.addEventListener('click', async () => {
-      try { await api('DELETE', '/v1/preferences/' + encodeURIComponent(key)); } catch {}
-      item.remove();
-    });
-
-    item.append(keyEl, valEl, del);
-    return item;
-  }
-
-  els.prefsAdd.addEventListener('click', () => {
-    const item = document.createElement('div');
-    item.className = 'pf-item';
-    const kInp = document.createElement('input');
-    kInp.className = 'pf-edit'; kInp.style.flex = '1'; kInp.placeholder = 'Key';
-    const vInp = document.createElement('input');
-    vInp.className = 'pf-edit'; vInp.style.flex = '1'; vInp.placeholder = 'Value';
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'pf-del'; saveBtn.textContent = '✓'; saveBtn.style.cssText = 'color:var(--success);opacity:1';
-    item.append(kInp, vInp, saveBtn);
-    els.prefsList.insertBefore(item, els.prefsAdd);
-    kInp.focus();
-
-    let done = false;
-    const doSave = async () => {
-      if (done) return; done = true;
-      const k = kInp.value.trim(), v = vInp.value.trim();
-      if (k && v) {
-        try { await api('PUT', '/v1/preferences', { key: k, value: v }); } catch {}
-        loadPrefs();
-      } else { item.remove(); }
-    };
-    saveBtn.addEventListener('click', doSave);
-    kInp.addEventListener('keydown', e => { if (e.key === 'Enter') vInp.focus(); if (e.key === 'Escape') { done = true; item.remove(); } });
-    vInp.addEventListener('keydown', e => { if (e.key === 'Enter') doSave(); if (e.key === 'Escape') { done = true; item.remove(); } });
-  });
 
   async function loadRouting() {
     try {
