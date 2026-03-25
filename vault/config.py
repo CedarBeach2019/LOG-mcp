@@ -20,7 +20,11 @@ class VaultSettings(BaseSettings):
     escalation_model_endpoint: str = "https://api.deepseek.com/v1/chat/completions"
     escalation_model_name: str = "deepseek-reasoner"
 
-    # Local inference (llama.cpp)
+    # Caching
+    cache_enabled: bool = True
+    cache_similarity_threshold: float = 0.85
+    cache_max_entries: int = 1000
+    cache_ttl_hours: int = 24
     local_models_dir: Path = Path.home() / ".log" / "models"
     local_gpu_layers: int = -1  # -1 = all layers on GPU
     local_max_tokens: int = 512

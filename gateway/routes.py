@@ -127,6 +127,7 @@ async def chat_completions(request: Request) -> JSONResponse:
             break
 
     # --- PII dehydration ---
+    t0 = time.time()
     dehydrator = Dehydrator(reallog=reallog)
     rehydrator = Rehydrator(reallog=reallog)
 
@@ -153,6 +154,31 @@ async def chat_completions(request: Request) -> JSONResponse:
     else:
         endpoint = settings.cheap_model_endpoint
 
+    # --- Semantic cache check ---
+    if getattr(settings, 'cache_enabled', True) and endpoint_type != "compare" and endpoint_type != "draft":
+        from vault.semantic_cache import _get_cache
+        cache = _get_cache(settings)
+        if cache:
+            cached = cache.get(user_content, model_name)
+            if cached:
+                latency = int((time.time() - t0) * 1000)
+                cache_iid = reallog.add_interaction(
+                    session_id="cache_" + str(int(time.time())),
+                    user_input=user_content,
+                    route_action="CACHE_HIT",
+                    target_model=model_name,
+                    response=cached["response"],
+                    response_latency_ms=latency,
+                )
+                return JSONResponse({
+                    "interaction_id": cache_iid,
+                    "choices": [{"message": {"role": "assistant", "content": cached["response"]}}],
+                    "model": model_name,
+                    "route": {"action": "cache_hit", "confidence": 1.0, "badge": "⚡ CACHED"},
+                    "cached": True,
+                    "latency_ms": latency,
+                })
+
     # Build system message with preferences
     prefs = reallog.get_preferences()
     prefs_text = ", ".join(f"{k}={v}" for k, v in prefs.items())
@@ -165,7 +191,6 @@ async def chat_completions(request: Request) -> JSONResponse:
         return JSONResponse({"error": "no API key configured"}, status_code=500)
 
     # --- Call model(s) ---
-    t0 = time.time()
     escalation_response = None
     escalation_latency = None
 
@@ -255,6 +280,13 @@ async def chat_completions(request: Request) -> JSONResponse:
         response_latency_ms=route.get("response_latency_ms", int((time.time() - t0) * 1000)),
         escalation_latency_ms=escalation_latency,
     )
+
+    # --- Store in semantic cache ---
+    if getattr(settings, 'cache_enabled', True) and endpoint_type != "compare":
+        from vault.semantic_cache import _get_cache
+        cache = _get_cache(settings)
+        if cache and response_text:
+            cache.put(user_content, model_name, response_text)
 
     # --- Build response ---
     result = {
@@ -526,6 +558,19 @@ async def feedback(request: Request) -> JSONResponse:
         return JSONResponse({"error": "interaction not found"}, status_code=404)
 
     reallog.update_feedback(interaction_id, fb, critique)
+
+    # Invalidate cache on negative feedback
+    if fb == "down" and interaction:
+        from vault.semantic_cache import _get_cache
+        cache = _get_cache(get_settings())
+        if cache:
+            query = interaction["user_input"] if "user_input" in interaction.keys() else ""
+            model = interaction["target_model"] if "target_model" in interaction.keys() else ""
+            if query and model:
+                removed = cache.invalidate(query, model)
+                if removed:
+                    logger.info("Cache invalidated: %d entries for model=%s", removed, model)
+
     return JSONResponse({"ok": True, "interaction_id": interaction_id})
 
 
@@ -863,3 +908,35 @@ async def local_model_status(request: Request) -> JSONResponse:
     manager = _get_local_manager()
     info = manager.get_loaded_model_info()
     return JSONResponse({"loaded": info is not None, "model": info})
+
+
+# === Semantic Cache ===
+
+async def cache_stats(request: Request) -> JSONResponse:
+    """GET /v1/cache/stats — cache hit rate, size, etc."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    from vault.semantic_cache import _get_cache
+    cache = _get_cache(get_settings())
+    if cache is None:
+        return JSONResponse({"enabled": False})
+    return JSONResponse({"enabled": True, **cache.stats()})
+
+
+async def cache_clear(request: Request) -> JSONResponse:
+    """POST /v1/cache/clear — clear all cached entries."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    from vault.semantic_cache import _get_cache
+    cache = _get_cache(get_settings())
+    if cache is None:
+        return JSONResponse({"enabled": False})
+    try:
+        body = await request.json()
+        model = body.get("model")
+    except Exception:
+        model = None
+    cache.clear(model)
+    return JSONResponse({"ok": True})
