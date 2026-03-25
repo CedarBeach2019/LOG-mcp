@@ -106,7 +106,8 @@ class RealLog:
         if self._conn is None:
             self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
-            # Enable foreign keys
+            # Enable WAL mode for concurrent reads and foreign keys
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys = ON")
         return self._conn
 
@@ -463,16 +464,20 @@ class RealLog:
 class Dehydrator:
     """Detect and replace PII with typed bracket placeholders."""
 
+    # Class-level compiled patterns (shared across all instances — no per-request recompilation)
+    _COMPILED_PATTERNS = {k: re.compile(v, re.IGNORECASE if k == 'address' else 0)
+                          for k, v in {
+        'email': r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b',
+        'phone': r'\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
+        'ssn': r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b',
+        'credit_card': r'\b(?:\d{4}[- ]?){3}\d{4}\b',
+        'api_key': r'\b(?:sk|pk|token|key|secret|api[_-]?key)[-_][a-zA-Z0-9_\-]{16,}\b',
+    }.items()}
+
     def __init__(self, reallog: RealLog, settings=None):
         self.reallog = reallog
         self.settings = settings
-        self.patterns = {
-            'email': r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b',
-            'phone': r'\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
-            'ssn': r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b',
-            'credit_card': r'\b(?:\d{4}[- ]?){3}\d{4}\b',
-            'api_key': r'\b(?:sk|pk|token|key|secret|api[_-]?key)[-_][a-zA-Z0-9_\-]{16,}\b',
-        }
+        self.patterns = self._COMPILED_PATTERNS
 
     @staticmethod
     def build_preamble() -> str:
@@ -490,7 +495,7 @@ class Dehydrator:
         entities = []
 
         for entity_type, pattern in self.patterns.items():
-            for match in re.finditer(pattern, text, re.IGNORECASE):
+            for match in pattern.finditer(text):
                 entities.append((entity_type, match.group()))
 
         # Improved name detection
@@ -669,36 +674,37 @@ class Dehydrator:
         return self._next_letter_id(type_prefix)
 
     def _next_letter_id(self, prefix: str) -> str:
-        """Get next letter-suffixed ID for a prefix (A, B, ..., Z, AA, AB, ...)."""
+        """Get next letter-suffixed ID for a prefix (A, B, ..., Z, AA, AB, ...).
+        
+        Uses MAX-based lookup instead of fetching all rows — O(1) query.
+        """
         prefix = prefix.upper()
-        # Use the RealLog's connection
         conn = self.reallog._get_connection()
-        # Get all existing entity_ids for this prefix
-        rows = conn.execute(
-            "SELECT entity_id FROM pii_map WHERE entity_id LIKE ?",
+        row = conn.execute(
+            "SELECT entity_id FROM pii_map WHERE entity_id LIKE ? ORDER BY entity_id DESC LIMIT 1",
             (f"{prefix}_%",)
-        ).fetchall()
-        used_ids = set()
-        for row in rows:
-            eid = row[0]
-            used_ids.add(eid)
+        ).fetchone()
         
-        # Try single letters A-Z first
-        for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-            candidate = f"{prefix}_{c}"
-            if candidate not in used_ids:
-                return candidate
+        if row is None:
+            return f"{prefix}_A"
         
-        # Try two-letter combinations
-        for c1 in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-            for c2 in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                candidate = f"{prefix}_{c1}{c2}"
-                if candidate not in used_ids:
-                    return candidate
+        # Parse the last ID and increment
+        suffix = row[0].split("_", 1)[1]
+        # Convert to number: A=0, B=1, ..., Z=25, AA=26, AB=27, ...
+        def to_num(s):
+            return sum((ord(c) - 65) * (26 ** i) for i, c in enumerate(reversed(s)))
+        def to_letters(n):
+            if n < 26:
+                return chr(65 + n)
+            chars = []
+            while n >= 26:
+                chars.append(chr(65 + n % 26))
+                n = n // 26 - 1
+            chars.append(chr(65 + n))
+            return "".join(reversed(chars))
         
-        # Fallback: use prefix with timestamp
-        import time
-        return f"{prefix}_{int(time.time())}"
+        next_num = to_num(suffix) + 1
+        return f"{prefix}_{to_letters(next_num)}"
 
     def _store_entity(self, entity: PIIEntity) -> PIIEntity:
         """Thread-safe check-and-insert for PII entities."""

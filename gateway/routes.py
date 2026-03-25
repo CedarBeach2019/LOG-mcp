@@ -10,9 +10,21 @@ from pathlib import Path
 
 import httpx
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, HTMLResponse
 
 from gateway.auth import create_token, get_jwt_secret, verify_token
+
+# Shared httpx client — reuses TCP connections across requests (major latency win)
+_shared_client: httpx.AsyncClient | None = None
+
+def _get_client() -> httpx.AsyncClient:
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _shared_client
 from gateway.deps import get_reallog, get_settings
 from vault.core import Dehydrator, Rehydrator
 from vault.draft_profiles import get_draft_profiles
@@ -37,11 +49,10 @@ def _authenticate(request: Request) -> JSONResponse | None:
     return None
 
 
-async def serve_index(request: Request) -> JSONResponse:
+async def serve_index(request: Request) -> HTMLResponse:
     """GET / — serve the chat UI."""
-    return JSONResponse(
+    return HTMLResponse(
         open(WEB_DIR / "index.html").read(),
-        media_type="text/html",
     )
 
 
@@ -71,16 +82,16 @@ async def _call_model(endpoint: str, api_key: str, model: str,
         body = {"model": model, "messages": messages}
         if temperature is not None:
             body["temperature"] = temperature
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                endpoint,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-                timeout=timeout,
-            )
+        client = _get_client()
+        resp = await client.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=timeout,
+        )
         if resp.status_code != 200:
             return resp.status_code, None, f"upstream returned {resp.status_code}"
         return 200, resp.json(), ""
@@ -554,6 +565,116 @@ async def stats(request: Request) -> JSONResponse:
     })
 
 
+async def routing_stats(request: Request) -> JSONResponse:
+    """GET /v1/stats/routing — return current routing stats."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    reallog = get_reallog()
+    days = int(request.query_params.get("days", 7))
+    from vault.stats_collector import StatsCollector
+    collector = StatsCollector(reallog.db)
+    try:
+        stats = collector.collect(days)
+        return JSONResponse(stats.to_dict())
+    finally:
+        collector.close()
+
+
+async def routing_suggest(request: Request) -> JSONResponse:
+    """POST /v1/routing/suggest — dry-run routing suggestions."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    reallog = get_reallog()
+    days = 7
+    try:
+        body = await request.json()
+        days = body.get("days", 7)
+    except Exception:
+        pass
+
+    from vault.stats_collector import StatsCollector
+    from vault.routing_updater import RoutingUpdater
+    collector = StatsCollector(reallog.db)
+    updater = RoutingUpdater(reallog.db)
+    try:
+        stats = collector.collect(days)
+        result = updater.dry_run(stats)
+        return JSONResponse(result)
+    finally:
+        collector.close()
+        updater.close()
+
+
+async def routing_update(request: Request) -> JSONResponse:
+    """POST /v1/routing/update — apply routing suggestions (use ?dry=true for preview)."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    dry = request.query_params.get("dry", "false").lower() == "true"
+    reallog = get_reallog()
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    days = body.get("days", 7)
+
+    from vault.stats_collector import StatsCollector
+    from vault.routing_updater import RoutingUpdater, RoutingSuggestion
+    collector = StatsCollector(reallog.db)
+    updater = RoutingUpdater(reallog.db)
+    try:
+        stats = collector.collect(days)
+
+        if dry:
+            result = updater.dry_run(stats)
+            result["status"] = "dry_run_preview"
+            return JSONResponse(result)
+
+        # Validate suggestions if provided
+        provided = body.get("suggestions")
+        if provided:
+            suggestions = [RoutingSuggestion(**s) for s in provided]
+        else:
+            suggestions = updater.suggest_updates(stats)
+
+        if not suggestions:
+            return JSONResponse({"status": "no_changes", "suggestions": []})
+
+        success = updater.apply_updates(suggestions)
+        return JSONResponse({
+            "status": "applied" if success else "failed",
+            "suggestions": [s.to_dict() for s in suggestions],
+        })
+    finally:
+        collector.close()
+        updater.close()
+
+
+async def routing_history(request: Request) -> JSONResponse:
+    """GET /v1/routing/history — list of past routing updates."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    reallog = get_reallog()
+    limit = int(request.query_params.get("limit", 20))
+
+    from vault.routing_updater import RoutingUpdater
+    updater = RoutingUpdater(reallog.db)
+    try:
+        history = updater.get_history(limit)
+        return JSONResponse({"history": history})
+    finally:
+        updater.close()
+
+
 async def health(request: Request) -> JSONResponse:
     """GET /v1/health — check service availability."""
     settings = get_settings()
@@ -561,21 +682,21 @@ async def health(request: Request) -> JSONResponse:
 
     # Check cheap model
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                settings.cheap_model_endpoint.rsplit("/chat/completions", 1)[0].rsplit("/v1", 1)[0]
-                    or settings.cheap_model_endpoint,
-                timeout=3.0,
-            )
+        client = _get_client()
+        resp = await client.get(
+            settings.cheap_model_endpoint.rsplit("/chat/completions", 1)[0].rsplit("/v1", 1)[0]
+                or settings.cheap_model_endpoint,
+            timeout=3.0,
+        )
         results["cheap"] = True
     except Exception:
         results["cheap"] = False
 
     # Check Ollama
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{settings.ollama_base_url}/api/tags", timeout=2.0)
-            results["ollama"] = resp.status_code == 200
+        client = _get_client()
+        resp = await client.get(f"{settings.ollama_base_url}/api/tags", timeout=2.0)
+        results["ollama"] = resp.status_code == 200
     except Exception:
         results["ollama"] = False
 

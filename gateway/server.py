@@ -17,6 +17,10 @@ from gateway.routes import (
     profiles_create,
     profiles_delete as profiles_delete_route,
     profiles_list,
+    routing_history,
+    routing_stats,
+    routing_suggest,
+    routing_update,
     serve_index,
     stats,
 )
@@ -37,6 +41,10 @@ app = Starlette(
         Route("/v1/profiles", profiles_create, methods=["POST"]),
         Route("/v1/profiles/{name}", profiles_delete_route, methods=["DELETE"]),
         Route("/stats", stats, methods=["GET"]),
+        Route("/v1/stats/routing", routing_stats, methods=["GET"]),
+        Route("/v1/routing/suggest", routing_suggest, methods=["POST"]),
+        Route("/v1/routing/update", routing_update, methods=["POST"]),
+        Route("/v1/routing/history", routing_history, methods=["GET"]),
     ],
 )
 
