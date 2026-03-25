@@ -169,6 +169,41 @@ async def chat_completions(request: Request) -> JSONResponse:
     escalation_response = None
     escalation_latency = None
 
+    if endpoint_type == "local":
+        # Use local llama.cpp model
+        local_mgr = _get_local_manager()
+        backend = local_mgr.get_backend()
+        if backend is None or not backend.is_loaded:
+            # Fallback to cloud cheap model
+            logger.warning("Local model not loaded, falling back to cloud")
+            endpoint_type = "cheap"
+        else:
+            local_content = await backend.agenerate(
+                upstream_messages,
+                temperature=0.7,
+                max_tokens=getattr(settings, 'local_max_tokens', 512),
+            )
+            latency = int((time.time() - t0) * 1000)
+            if local_content:
+                # Rehydrate
+                rehydrated, _ = rehydrator.rehydrate(local_content)
+                # Store interaction
+                reallog.store_interaction(
+                    user_input=user_content, model_response=local_content,
+                    model_name="local", route_action="LOCAL", latency_ms=latency,
+                )
+                return JSONResponse({
+                    "choices": [{"message": {"role": "assistant", "content": rehydrated}}],
+                    "model": "local",
+                    "route": {"action": "local", "confidence": 1.0, "badge": "🔵 LOCAL"},
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                    "latency_ms": latency,
+                })
+            else:
+                # Local failed, fallback to cloud
+                logger.warning("Local inference failed, falling back to cloud")
+                endpoint_type = "cheap"
+
     if endpoint_type == "compare":
         # Fire both in parallel
         cheap_status, cheap_data, cheap_err = await _call_model(
@@ -700,6 +735,16 @@ async def health(request: Request) -> JSONResponse:
     except Exception:
         results["ollama"] = False
 
+    # Check local llama.cpp model
+    try:
+        local_mgr = _get_local_manager()
+        info = local_mgr.get_loaded_model_info()
+        results["local_model"] = info is not None
+        if info:
+            results["local_model_name"] = info.get("model_name", "unknown")
+    except Exception:
+        results["local_model"] = False
+
     return JSONResponse(results)
 
 
@@ -754,3 +799,67 @@ async def profiles_delete(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "name": name}, status_code=404)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+
+
+# === Local Inference (llama.cpp) ===
+
+_local_manager = None
+
+def _get_local_manager():
+    global _local_manager
+    if _local_manager is None:
+        from vault.model_manager import ModelManager
+        from gateway.deps import get_settings
+        s = get_settings()
+        _local_manager = ModelManager(s.local_models_dir, s.local_gpu_layers, s.local_ctx_size)
+    return _local_manager
+
+
+async def local_models_list(request: Request) -> JSONResponse:
+    """GET /v1/local/models — list available .gguf models."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    manager = _get_local_manager()
+    models = manager.list_models()
+    loaded = manager.get_loaded_model_info()
+    return JSONResponse({"models": models, "loaded": loaded})
+
+
+async def local_model_load(request: Request) -> JSONResponse:
+    """POST /v1/local/load — load a model by name."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    try:
+        body = await request.json()
+        model_name = body.get("model", "")
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    if not model_name:
+        return JSONResponse({"error": "model name required"}, status_code=400)
+    manager = _get_local_manager()
+    if manager.load_model(model_name):
+        info = manager.get_loaded_model_info()
+        return JSONResponse({"ok": True, "model": info})
+    return JSONResponse({"error": f"model '{model_name}' not found or failed to load"}, status_code=400)
+
+
+async def local_model_unload(request: Request) -> JSONResponse:
+    """POST /v1/local/unload — unload current model."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    manager = _get_local_manager()
+    manager.unload()
+    return JSONResponse({"ok": True})
+
+
+async def local_model_status(request: Request) -> JSONResponse:
+    """GET /v1/local/status — loaded model info and resource usage."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    manager = _get_local_manager()
+    info = manager.get_loaded_model_info()
+    return JSONResponse({"loaded": info is not None, "model": info})

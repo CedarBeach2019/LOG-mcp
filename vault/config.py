@@ -20,9 +20,11 @@ class VaultSettings(BaseSettings):
     escalation_model_endpoint: str = "https://api.deepseek.com/v1/chat/completions"
     escalation_model_name: str = "deepseek-reasoner"
 
-    # Local inference
-    ollama_base_url: str = "http://localhost:11434"
-    router_model: str = "qwen3.5:2b"
+    # Local inference (llama.cpp)
+    local_models_dir: Path = Path.home() / ".log" / "models"
+    local_gpu_layers: int = -1  # -1 = all layers on GPU
+    local_max_tokens: int = 512
+    local_ctx_size: int = 4096
 
     # Profiles
     custom_profiles_path: Path = Path.home() / ".log" / "vault" / "profiles.json"
