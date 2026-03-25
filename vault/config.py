@@ -23,16 +23,6 @@ class ProviderProfile:
         }
 
 
-DEFAULT_DRAFT_PROFILES = [
-    {"name": "precise", "temperature": 0.2,
-     "system": "Be precise and concise. One sentence approach only. Under 280 characters.", "max_chars": 280},
-    {"name": "creative", "temperature": 0.7,
-     "system": "Think creatively. One sentence approach only. Under 280 characters.", "max_chars": 280},
-    {"name": "deep", "temperature": 0.1,
-     "system": "Reason step by step. One sentence. Under 280 characters.", "max_chars": 280, "_use_escalation": True},
-]
-
-
 class VaultSettings(BaseSettings):
     """Application settings. Override with LOG_ prefix env vars."""
 
@@ -53,6 +43,9 @@ class VaultSettings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     router_model: str = "qwen3.5:2b"
 
+    # Profiles
+    custom_profiles_path: Path = Path.home() / ".log" / "vault" / "profiles.json"
+
     # Routing behavior
     instant_send: bool = True
     parallel_mode: bool = False
@@ -63,16 +56,7 @@ class VaultSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="LOG_")
 
-    def get_draft_profiles(self) -> list[ProviderProfile]:
+    def get_draft_profiles(self):
         """Build provider profiles from settings."""
-        profiles = []
-        for p in DEFAULT_DRAFT_PROFILES:
-            use_esc = p.pop("_use_escalation", False)
-            endpoint = self.escalation_model_endpoint if use_esc else self.cheap_model_endpoint
-            model = self.escalation_model_name if use_esc else self.cheap_model_name
-            profiles.append(ProviderProfile(
-                name=p["name"], endpoint=endpoint, model=model,
-                temperature=p["temperature"], system=p.get("system", ""),
-                max_chars=p.get("max_chars", 0),
-            ))
-        return profiles
+        from vault.profiles import ProfileManager
+        return ProfileManager().list_profiles(self)

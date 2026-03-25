@@ -16,6 +16,7 @@ from gateway.auth import create_token, get_jwt_secret, verify_token
 from gateway.deps import get_reallog, get_settings
 from vault.core import Dehydrator, Rehydrator
 from vault.draft_profiles import get_draft_profiles
+from vault.profiles import ProfileManager
 from vault.routing_script import classify, resolve_action
 
 logger = logging.getLogger("gateway.routes")
@@ -227,9 +228,15 @@ async def _call_draft_profile(settings, api_key: str, profile: dict,
     """Call a single draft profile. Returns result dict (never raises)."""
     t0 = time.time()
     name = profile["name"]
-    endpoint = getattr(settings, profile["endpoint_key"], "")
-    model = getattr(settings, profile["model_key"], "")
-    system_msg = {"role": "system", "content": profile["system"]}
+    # New-style: endpoint and model directly on profile
+    if "endpoint" in profile and "model" in profile:
+        endpoint = profile["endpoint"]
+        model = profile["model"]
+    else:
+        # Legacy: resolve via settings attribute keys
+        endpoint = getattr(settings, profile["endpoint_key"], "")
+        model = getattr(settings, profile["model_key"], "")
+    system_msg = {"role": "system", "content": profile.get("system_prompt", profile.get("system", ""))}
     body = {"model": model, "messages": [system_msg] + messages}
     if "temperature" in profile:
         body["temperature"] = profile["temperature"]
@@ -353,8 +360,13 @@ async def elaborate(request: Request) -> JSONResponse:
     if not winner_cfg:
         return JSONResponse({"error": f"unknown profile: {winner_profile}"}, status_code=400)
 
-    endpoint = getattr(settings, winner_cfg["endpoint_key"], "")
-    model = getattr(settings, winner_cfg["model_key"], "")
+    # New-style: endpoint/model directly; Legacy: via settings keys
+    if "endpoint" in winner_cfg and "model" in winner_cfg:
+        endpoint = winner_cfg["endpoint"]
+        model = winner_cfg["model"]
+    else:
+        endpoint = getattr(settings, winner_cfg["endpoint_key"], "")
+        model = getattr(settings, winner_cfg["model_key"], "")
 
     # Build system prompt
     prefs = reallog.get_preferences()
@@ -572,3 +584,56 @@ async def health(request: Request) -> JSONResponse:
         results["ollama"] = False
 
     return JSONResponse(results)
+
+
+# ---------------------------------------------------------------------------
+# Profile management endpoints
+# ---------------------------------------------------------------------------
+
+async def profiles_list(request: Request) -> JSONResponse:
+    """GET /v1/profiles — list all profiles (defaults + custom)."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    settings = get_settings()
+    profiles = get_draft_profiles(settings)
+    return JSONResponse({"profiles": profiles})
+
+
+async def profiles_create(request: Request) -> JSONResponse:
+    """POST /v1/profiles — create or update a custom profile."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    manager = ProfileManager()
+    try:
+        profile = manager.add_profile(body)
+        return JSONResponse({"ok": True, "profile": profile})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+async def profiles_delete(request: Request) -> JSONResponse:
+    """DELETE /v1/profiles/{name} — remove a custom profile."""
+    auth_err = _authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    name = request.path_params.get("name", "")
+    if not name:
+        return JSONResponse({"error": "name required"}, status_code=400)
+
+    manager = ProfileManager()
+    try:
+        removed = manager.remove_profile(name)
+        if removed:
+            return JSONResponse({"ok": True, "name": name})
+        return JSONResponse({"ok": False, "name": name}, status_code=404)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)

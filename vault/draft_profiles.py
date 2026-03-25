@@ -1,6 +1,12 @@
-"""Draft provider profiles — configs for parallel draft calls."""
+"""Draft provider profiles — configs for parallel draft calls.
 
-DRAFT_PROFILES = [
+This module re-exports from vault.profiles for backwards compatibility.
+"""
+
+from vault.profiles import get_draft_profiles, ProfileManager, DEFAULT_PROFILES
+
+# Keep backwards compat alias
+DRAFT_PROFILES: list[dict] = [
     {
         "name": "precise",
         "endpoint_key": "cheap_model_endpoint",
@@ -26,7 +32,3 @@ DRAFT_PROFILES = [
         "max_chars": 280,
     },
 ]
-
-
-def get_draft_profiles() -> list[dict]:
-    return DRAFT_PROFILES

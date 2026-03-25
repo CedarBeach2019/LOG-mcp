@@ -14,6 +14,9 @@ from gateway.routes import (
     preferences_delete,
     preferences_list,
     preferences_set,
+    profiles_create,
+    profiles_delete as profiles_delete_route,
+    profiles_list,
     serve_index,
     stats,
 )
@@ -30,6 +33,9 @@ app = Starlette(
         Route("/v1/preferences", preferences_set, methods=["POST"]),
         Route("/v1/preferences/{key}", preferences_delete, methods=["DELETE"]),
         Route("/v1/health", health, methods=["GET"]),
+        Route("/v1/profiles", profiles_list, methods=["GET"]),
+        Route("/v1/profiles", profiles_create, methods=["POST"]),
+        Route("/v1/profiles/{name}", profiles_delete_route, methods=["DELETE"]),
         Route("/stats", stats, methods=["GET"]),
     ],
 )
