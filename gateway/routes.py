@@ -694,6 +694,13 @@ async def feedback(request: Request):
                 if removed:
                     logger.info("Cache invalidated: %d entries for model=%s", removed, model)
 
+    # Auto-optimize routing after every 10 feedbacks
+    if fb in ("up", "down"):
+        try:
+            _maybe_auto_optimize(reallog)
+        except Exception as exc:
+            logger.warning("Auto-optimization failed: %s", exc)
+
     return JSONResponse({"ok": True, "interaction_id": interaction_id})
 
 
@@ -880,12 +887,51 @@ async def routing_history(request: Request):
     if auth_err is not None:
         return auth_err
     limit = int(request.query_params.get("limit", 20))
-    from vault.routing_updater import RoutingUpdater
-    updater = RoutingUpdater(get_reallog().db)
+    from vault.routing_optimizer import RoutingOptimizer
+    optimizer = RoutingOptimizer(get_settings().db_path)
     try:
-        return JSONResponse({"history": updater.get_history(limit)})
+        return JSONResponse({"history": optimizer.get_optimization_history(limit)})
     finally:
-        updater.close()
+        conn = get_reallog()._get_connection()
+        # also include legacy history if it exists
+        pass
+
+
+async def routing_rules_list(request: Request):
+    """GET /v1/routing/rules — list current routing rules."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    from vault.routing_optimizer import RoutingOptimizer
+    optimizer = RoutingOptimizer(get_settings().db_path)
+    rules = optimizer.get_rules(enabled_only=False)
+    return JSONResponse({"rules": [vars(r) for r in rules]})
+
+
+async def routing_optimize(request: Request):
+    """POST /v1/routing/optimize — manually trigger routing optimization."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    min_interactions = body.get("min_interactions", 5)
+    days_back = body.get("days_back", 30)
+    from vault.routing_optimizer import RoutingOptimizer
+    optimizer = RoutingOptimizer(get_settings().db_path)
+    result = optimizer.analyze_and_optimize(min_interactions=min_interactions, days_back=days_back)
+    return JSONResponse({
+        "timestamp": result.timestamp,
+        "interactions_analyzed": result.interactions_analyzed,
+        "rules_added": result.rules_added,
+        "rules_modified": result.rules_modified,
+        "changes": result.changes,
+        "summary": result.summary,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -985,6 +1031,43 @@ async def cache_clear(request: Request):
         model = None
     cache.clear(model)
     return JSONResponse({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Auto-optimization
+# ---------------------------------------------------------------------------
+
+_last_optimize_check = 0.0
+_optimize_interval = 10  # run after every 10 feedbacks
+
+def _maybe_auto_optimize(reallog):
+    """Run routing optimization if enough feedback has accumulated."""
+    global _last_optimize_check
+    import time as _time
+
+    conn = reallog._get_connection()
+    row = conn.execute("SELECT COUNT(*) as n FROM interactions WHERE feedback IS NOT NULL").fetchone()
+    total_feedback = row["n"]
+
+    if total_feedback < _optimize_interval:
+        return
+    if total_feedback - _last_optimize_check < _optimize_interval:
+        return
+
+    _last_optimize_check = total_feedback
+    logger.info("Running auto-optimization (total feedback: %d)", total_feedback)
+
+    try:
+        from vault.routing_optimizer import RoutingOptimizer
+        settings = get_settings()
+        optimizer = RoutingOptimizer(settings.db_path)
+        result = optimizer.analyze_and_optimize(min_interactions=10)
+        if result.changes:
+            logger.info("Auto-optimization: %s", result.summary)
+        else:
+            logger.info("Auto-optimization: no changes needed")
+    except Exception as exc:
+        logger.warning("Auto-optimization error: %s", exc)
 
 
 # ---------------------------------------------------------------------------
