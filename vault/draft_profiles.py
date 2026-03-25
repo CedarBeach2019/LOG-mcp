@@ -3,7 +3,7 @@
 This module re-exports from vault.profiles for backwards compatibility.
 """
 
-from vault.profiles import get_draft_profiles, ProfileManager, DEFAULT_PROFILES
+from vault.profiles import get_draft_profiles as _get_draft_profiles, ProfileManager, DEFAULT_PROFILES
 
 # Keep backwards compat alias
 DRAFT_PROFILES: list[dict] = [
@@ -32,3 +32,7 @@ DRAFT_PROFILES: list[dict] = [
         "max_chars": 280,
     },
 ]
+
+def get_draft_profiles(settings=None):
+    """Wrapper for vault.profiles.get_draft_profiles that accepts optional settings."""
+    return _get_draft_profiles(settings)

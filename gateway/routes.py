@@ -283,7 +283,9 @@ async def drafts(request: Request) -> JSONResponse:
     if not messages:
         return JSONResponse({"error": "no messages"}, status_code=400)
 
-    profiles = body.get("profiles") or get_draft_profiles()
+    profiles = body.get("profiles")
+    if profiles is None:
+        profiles = get_draft_profiles(settings)
 
     # Dehydrate messages
     dehydrator = Dehydrator(reallog=reallog)
@@ -540,13 +542,14 @@ async def stats(request: Request) -> JSONResponse:
         return auth_err
 
     reallog = get_reallog()
-    entity_count = reallog.db.execute("SELECT COUNT(*) AS n FROM pii_map").fetchone()["n"]
-    session_count = reallog.db.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"]
-    interaction_count = reallog.db.execute("SELECT COUNT(*) AS n FROM interactions").fetchone()["n"]
-    thumbs_up = reallog.db.execute(
+    conn = reallog._get_connection()
+    entity_count = conn.execute("SELECT COUNT(*) AS n FROM pii_map").fetchone()["n"]
+    session_count = conn.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"]
+    interaction_count = conn.execute("SELECT COUNT(*) AS n FROM interactions").fetchone()["n"]
+    thumbs_up = conn.execute(
         "SELECT COUNT(*) AS n FROM interactions WHERE feedback='up'"
     ).fetchone()["n"]
-    thumbs_down = reallog.db.execute(
+    thumbs_down = conn.execute(
         "SELECT COUNT(*) AS n FROM interactions WHERE feedback='down'"
     ).fetchone()["n"]
     return JSONResponse({

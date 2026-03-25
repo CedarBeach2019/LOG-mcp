@@ -14,7 +14,8 @@ TOKEN_EXPIRY_HOURS = 24
 
 def get_jwt_secret(reallog: RealLog) -> str:
     """Fetch or generate-and-persist the JWT signing secret."""
-    row = reallog.db.execute(
+    conn = reallog._get_connection()
+    row = conn.execute(
         "SELECT value FROM user_preferences WHERE key = ?",
         ("jwt_secret",),
     ).fetchone()
@@ -22,11 +23,11 @@ def get_jwt_secret(reallog: RealLog) -> str:
         return row["value"]
 
     secret = secrets.token_urlsafe(32)
-    reallog.db.execute(
+    conn.execute(
         "INSERT INTO user_preferences (key, value) VALUES (?, ?)",
         ("jwt_secret", secret),
     )
-    reallog.db.commit()
+    conn.commit()
     return secret
 
 

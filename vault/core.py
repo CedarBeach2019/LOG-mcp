@@ -321,24 +321,48 @@ class RealLog:
             )
 
     def next_log_id(self, entity_type: str) -> str:
-        """Generate next log ID for an entity type."""
-        with DatabaseConnection(self.db_path) as conn:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM pii_map WHERE entity_type = ?",
-                (entity_type,)
-            ).fetchone()[0]
-
+        """Generate next log ID for an entity type. For compatibility."""
+        # This method is kept for compatibility, but Dehydrator uses _next_letter_id
+        # We'll generate a similar ID using the same logic
         type_prefix = {
-            'person': 'ENTITY',
+            'person': 'PERSON',
             'email': 'EMAIL',
             'phone': 'PHONE',
-            'address': 'ADDR',
+            'address': 'ADDRESS',
             'ssn': 'SSN',
             'credit_card': 'CC',
-            'api_key': 'KEY'
-        }.get(entity_type, 'ENT')
-
-        return f"{type_prefix}_{count + 1}"
+            'api_key': 'KEY',
+            'passport': 'PASSPORT'
+        }.get(entity_type, 'ENTITY')
+        
+        # Generate ID directly without creating a Dehydrator (to avoid circular issues)
+        prefix = type_prefix.upper()
+        conn = self._get_connection()
+        rows = conn.execute(
+            "SELECT entity_id FROM pii_map WHERE entity_id LIKE ?",
+            (f"{prefix}_%",)
+        ).fetchall()
+        used_ids = set()
+        for row in rows:
+            eid = row[0]
+            used_ids.add(eid)
+        
+        # Try single letters A-Z first
+        for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            candidate = f"{prefix}_{c}"
+            if candidate not in used_ids:
+                return candidate
+        
+        # Try two-letter combinations
+        for c1 in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            for c2 in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                candidate = f"{prefix}_{c1}{c2}"
+                if candidate not in used_ids:
+                    return candidate
+        
+        # Fallback: use prefix with timestamp
+        import time
+        return f"{prefix}_{int(time.time())}"
 
 
     # -- Interaction tracking (Phase 2) --
@@ -423,16 +447,17 @@ class RealLog:
             "show_work": "false",
             "format": "bullet_points",
         }
+        conn = self._get_connection()
         for key, value in defaults.items():
-            existing = self.db.execute(
+            existing = conn.execute(
                 "SELECT 1 FROM user_preferences WHERE key = ?", (key,)
             ).fetchone()
             if not existing:
-                self.db.execute(
+                conn.execute(
                     "INSERT INTO user_preferences (key, value) VALUES (?, ?)",
                     (key, value)
                 )
-        self.db.commit()
+        conn.commit()
 
 
 class Dehydrator:
@@ -448,9 +473,6 @@ class Dehydrator:
             'credit_card': r'\b(?:\d{4}[- ]?){3}\d{4}\b',
             'api_key': r'\b(?:sk|pk|token|key|secret|api[_-]?key)[-_][a-zA-Z0-9_\-]{16,}\b',
         }
-
-    def detect_entities(self, text: str) -> List[Tuple[str, str]]:
-        """Detect PII entities in text using regex patterns."""
 
     @staticmethod
     def build_preamble() -> str:
@@ -641,72 +663,88 @@ class Dehydrator:
             'address': 'ADDRESS',
             'ssn': 'SSN',
             'credit_card': 'CC',
-            'api_key': 'KEY'
+            'api_key': 'KEY',
+            'passport': 'PASSPORT'
         }.get(entity_type, 'ENTITY')
         return self._next_letter_id(type_prefix)
 
     def _next_letter_id(self, prefix: str) -> str:
         """Get next letter-suffixed ID for a prefix (A, B, ..., Z, AA, AB, ...)."""
         prefix = prefix.upper()
-        with DatabaseConnection(self.reallog.db_path) as conn:
-            # Get all existing entity_ids for this prefix
-            rows = conn.execute(
-                "SELECT entity_id FROM pii_map WHERE entity_id LIKE ?",
-                (f"{prefix}_%",)
-            ).fetchall()
-            letters = set()
-            for row in rows:
-                eid = row[0]
-                suffix = eid[len(prefix) + 1:]  # after prefix_
-                if len(suffix) == 1 and suffix.isalpha():
-                    letters.add(suffix.upper())
-            # Find first unused letter
-            for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                if c not in letters:
-                    return f"{prefix}_{c}"
-            # Fallback: use AA, AB, etc.
-            return f"{prefix}_AA"  # Simple fallback for now
+        # Use the RealLog's connection
+        conn = self.reallog._get_connection()
+        # Get all existing entity_ids for this prefix
+        rows = conn.execute(
+            "SELECT entity_id FROM pii_map WHERE entity_id LIKE ?",
+            (f"{prefix}_%",)
+        ).fetchall()
+        used_ids = set()
+        for row in rows:
+            eid = row[0]
+            used_ids.add(eid)
+        
+        # Try single letters A-Z first
+        for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            candidate = f"{prefix}_{c}"
+            if candidate not in used_ids:
+                return candidate
+        
+        # Try two-letter combinations
+        for c1 in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            for c2 in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                candidate = f"{prefix}_{c1}{c2}"
+                if candidate not in used_ids:
+                    return candidate
+        
+        # Fallback: use prefix with timestamp
+        import time
+        return f"{prefix}_{int(time.time())}"
 
     def _store_entity(self, entity: PIIEntity) -> PIIEntity:
         """Thread-safe check-and-insert for PII entities."""
         with self.reallog._lock:
-            with DatabaseConnection(self.reallog.db_path) as conn:
-                # Check if already exists
-                row = conn.execute(
-                    "SELECT entity_id, entity_type, real_value, created_at, last_used FROM pii_map WHERE real_value = ?",
-                    (entity.real_value,)
-                ).fetchone()
-                if row:
-                    existing = PIIEntity(
-                        entity_id=row['entity_id'],
-                        entity_type=row['entity_type'],
-                        real_value=row['real_value'],
-                        created_at=row['created_at'],
-                        last_used=row['last_used']
-                    )
-                    conn.execute(
-                        "UPDATE pii_map SET last_used = ? WHERE entity_id = ?",
-                        (datetime.now().isoformat(), existing.entity_id)
-                    )
-                    return existing
-
-                # Generate ID
-                entity_id = self._next_letter_id(entity.entity_type or 'ENTITY')
-                entity.entity_id = entity_id
-
-                conn.execute(
-                    "INSERT INTO pii_map (entity_id, entity_type, real_value, created_at, last_used) VALUES (?, ?, ?, ?, ?)",
-                    (entity.entity_id, entity.entity_type, entity.real_value, entity.created_at, entity.last_used)
+            # Use the RealLog's connection directly
+            conn = self.reallog._get_connection()
+            # Check if already exists
+            row = conn.execute(
+                "SELECT entity_id, entity_type, real_value, created_at, last_used FROM pii_map WHERE real_value = ?",
+                (entity.real_value,)
+            ).fetchone()
+            if row:
+                existing = PIIEntity(
+                    entity_id=row['entity_id'],
+                    entity_type=row['entity_type'],
+                    real_value=row['real_value'],
+                    created_at=row['created_at'],
+                    last_used=row['last_used']
                 )
-                return entity
+                conn.execute(
+                    "UPDATE pii_map SET last_used = ? WHERE entity_id = ?",
+                    (datetime.now().isoformat(), existing.entity_id)
+                )
+                conn.commit()
+                return existing
+
+            # Generate ID
+            entity_type = entity.entity_type or 'ENTITY'
+            entity_id = self._next_letter_id(entity_type)
+            entity.entity_id = entity_id
+
+            conn.execute(
+                "INSERT INTO pii_map (entity_id, entity_type, real_value, created_at, last_used) VALUES (?, ?, ?, ?, ?)",
+                (entity.entity_id, entity.entity_type, entity.real_value, entity.created_at, entity.last_used)
+            )
+            conn.commit()
+            return entity
 
     def _update_last_used(self, entity_id: str) -> None:
         """Update the last_used timestamp for an entity."""
-        with DatabaseConnection(self.reallog.db_path) as conn:
-            conn.execute(
-                "UPDATE pii_map SET last_used = ? WHERE entity_id = ?",
-                (datetime.now().isoformat(), entity_id)
-            )
+        conn = self.reallog._get_connection()
+        conn.execute(
+            "UPDATE pii_map SET last_used = ? WHERE entity_id = ?",
+            (datetime.now().isoformat(), entity_id)
+        )
+        conn.commit()
 
 
 class Rehydrator:
