@@ -269,6 +269,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       <textarea id="message-input" placeholder="Type a message… (/draft for draft mode)" rows="1"></textarea>
       <div class="btn-group">
         <button id="draft-btn" title="Draft mode (generate multiple options)">🎯</button>
+        <button id="clear-btn" title="New chat">🗑️</button>
         <button id="send-btn" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         </button>
@@ -1350,27 +1351,16 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   // --- Session persistence ---
   let currentSessionId = sessionStorage.getItem('session_id') || '';
 
-  async function restoreLastSession() {
-    try {
-      const r = await api('GET', '/v1/sessions?limit=1');
-      if (!r.sessions || r.sessions.length === 0) return;
-      const sess = r.sessions[0];
-      const detail = await api('GET', `/v1/sessions/${sess.id}`);
-      if (!detail.messages || detail.messages.length === 0) return;
-      currentSessionId = sess.id;
-      sessionStorage.setItem('session_id', currentSessionId);
-      // Restore messages to UI (skip if messages already shown)
-      if (els.chatBox.children.length > 0) return;
-      for (const msg of detail.messages) {
-        if (msg.role === 'user') appendUser(msg.content, false);
-        else if (msg.role === 'assistant') appendAssistant(msg.content, false);
-      }
-      scrollToBottom();
-    } catch { /* silently fail — session restore is a nice-to-have */ }
-  }
-
-  // --- Session persistence ---
-  let currentSessionId = sessionStorage.getItem('session_id') || '';
+  // Clear/new chat button
+  $('#clear-btn').addEventListener('click', () => {
+    chatHistory = [];
+    $('#chat-box').innerHTML = '';
+    currentSessionId = '';
+    sessionStorage.removeItem('session_id');
+    drafts = [];
+    draftRanking = [];
+    els.input.focus();
+  });
 
   async function restoreLastSession() {
     try {
@@ -1392,7 +1382,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   }
 
   if (token) { showChat(); restoreLastSession(); }
-  else els.passphrase.focus();
   else els.passphrase.focus();
 })();
 </script>
