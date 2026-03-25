@@ -411,9 +411,31 @@ class Dehydrator:
         
         return entities
     
-    def dehydrate(self, text: str) -> Tuple[str, List[PIIEntity]]:
-        """Replace detected PII with LOG_ID placeholders."""
+    def dehydrate(self, text: str, *, use_llm: bool = False) -> Tuple[str, List[PIIEntity]]:
+        """Replace detected PII with LOG_ID placeholders.
+
+        Args:
+            text: Input text to scrub.
+            use_llm: If True, also query a local Ollama model to catch
+                PII that regex misses (relationships, implicit references).
+                Defaults to False for speed.
+        """
         entities = self.detect_entities(text)
+
+        # Optional LLM pass for contextual PII
+        if use_llm:
+            try:
+                from vault.llm_scorer import score_pii_sync
+
+                llm_result = score_pii_sync(text)
+                for ent in llm_result.get("entities", []):
+                    ent_text = ent.get("text", "").strip()
+                    ent_type = self._map_llm_type(ent.get("type", "other"))
+                    if ent_text:
+                        entities.append((ent_type, ent_text))
+            except Exception:
+                logger.debug("LLM scorer failed, falling back to regex-only", exc_info=True)
+
         processed_entities = []
         result = text
         
@@ -440,6 +462,17 @@ class Dehydrator:
             result = result.replace(real_value, f"<{entity_id}>")
         
         return result, processed_entities
+
+    @staticmethod
+    def _map_llm_type(llm_type: str) -> str:
+        """Map LLM-detected entity types to our internal types."""
+        mapping = {
+            "person": "person",
+            "relationship": "person",
+            "location": "address",
+            "other": "person",
+        }
+        return mapping.get(llm_type.lower(), "person")
     
     def _get_entity_by_value(self, real_value: str) -> Optional[PIIEntity]:
         """Retrieve entity by its real value."""
