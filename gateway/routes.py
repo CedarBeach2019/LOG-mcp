@@ -1187,3 +1187,57 @@ async def metrics_dashboard(request: Request):
     minutes = int(request.query_params.get("minutes", 60))
     from gateway.observability import MetricsCollector
     return JSONResponse(MetricsCollector.get_summary(minutes))
+
+
+async def training_export(request: Request):
+    """POST /v1/training/export — run the training data export pipeline."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    days_back = int(body.get("days_back", 30))
+    output_dir = body.get("output_dir", "")
+
+    from gateway.deps import get_settings
+    settings = get_settings()
+    db_path = settings.db_path
+    if not output_dir:
+        output_dir = str(Path(db_path).parent / "training_data")
+
+    from vault.training_pipeline import run_export_pipeline
+    summary = run_export_pipeline(db_path, output_dir, days_back)
+
+    return JSONResponse(summary)
+
+
+async def training_status(request: Request):
+    """GET /v1/training/status — check how much training data is available."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+
+    from gateway.deps import get_settings
+    settings = get_settings()
+    from vault.training_pipeline import extract_ranking_data, extract_feedback_data
+
+    rankings = extract_ranking_data(settings.db_path, days_back=90)
+    feedback = extract_feedback_data(settings.db_path, days_back=90)
+
+    return JSONResponse({
+        "rankings_available": len(rankings),
+        "feedback_available": len(feedback),
+        "ready_for_lora": len(rankings) >= 5,
+        "ready_for_dpo": any(r["loser_responses"] for r in rankings),
+        "suggestion": (
+            "Use /draft mode to generate comparative data for training"
+            if len(rankings) < 10
+            else "Good amount of data — run export pipeline to generate training files"
+        ),
+    })

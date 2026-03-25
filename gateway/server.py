@@ -5,6 +5,8 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.routing import Route
 
 from gateway.routes import (
+    training_export,
+    training_status,
     cache_clear,
     cache_stats,
     chat_completions,
@@ -72,6 +74,8 @@ routes = [
     Route("/v1/sessions/{session_id}", session_get, methods=["GET"]),
     Route("/v1/sessions/{session_id}", session_delete, methods=["DELETE"]),
     Route("/v1/metrics", metrics_dashboard, methods=["GET"]),
+    Route("/v1/training/export", training_export, methods=["POST"]),
+    Route("/v1/training/status", training_status, methods=["GET"]),
 ]
 
 app = Starlette(routes=routes)
