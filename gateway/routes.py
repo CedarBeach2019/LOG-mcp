@@ -586,6 +586,8 @@ async def _stream_chat(settings, reallog, dehydrator, rehydrator,
                        endpoint, model_name, endpoint_type, api_key, t0):
     """Stream chat completion as Server-Sent Events."""
     from starlette.responses import StreamingResponse
+    from datetime import datetime
+    from vault.core import Message
     import json
 
     status, lines, err = await call_model(endpoint, api_key, model_name,
@@ -618,17 +620,20 @@ async def _stream_chat(settings, reallog, dehydrator, rehydrator,
         finally:
             # Store after streaming completes
             if full_text:
-                rehydrated = rehydrator.rehydrate(full_text)
-                reallog.add_interaction(
-                    session_id=session_id, user_input=user_content,
-                    route_action=route["action"], route_reason=route.get("reason", ""),
-                    target_model=model_name, response=rehydrated,
-                    response_latency_ms=int((time.time() - t0) * 1000),
-                )
-                reallog.add_message(Message(
-                    session_id=session_id, role="assistant",
-                    content=rehydrated, timestamp=datetime.now().isoformat(),
-                ))
+                try:
+                    rehydrated = rehydrator.rehydrate(full_text)
+                    reallog.add_interaction(
+                        session_id=session_id, user_input=user_content,
+                        route_action=route["action"], route_reason=route.get("reason", ""),
+                        target_model=model_name, response=rehydrated,
+                        response_latency_ms=int((time.time() - t0) * 1000),
+                    )
+                    reallog.add_message(Message(
+                        session_id=session_id, role="assistant",
+                        content=rehydrated, timestamp=datetime.now().isoformat(),
+                    ))
+                except Exception:
+                    pass
 
     route_meta = json.dumps({
         "action": route["action"], "reason": route.get("reason", ""),

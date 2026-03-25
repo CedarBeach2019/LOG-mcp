@@ -68,7 +68,7 @@ async def call_model(endpoint: str, api_key: str, model: str,
                 },
                 json=body,
             )
-            resp = await client.send(req, stream=True, timeout=timeout)
+            resp = await client.send(req, stream=True)
             if resp.status_code != 200:
                 text = await resp.aread()
                 return resp.status_code, None, f"upstream returned {resp.status_code}: {text[:200]}"
