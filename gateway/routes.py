@@ -157,7 +157,15 @@ async def chat_completions(request: Request) -> JSONResponse:
     # --- Semantic cache check ---
     if getattr(settings, 'cache_enabled', True) and endpoint_type != "compare" and endpoint_type != "draft":
         from vault.semantic_cache import _get_cache
-        cache = _get_cache(settings)
+        embed_fn = None
+        try:
+            mgr = _get_local_manager()
+            backend = mgr.get_backend()
+            if backend and backend.is_loaded:
+                embed_fn = backend.embed
+        except Exception:
+            pass
+        cache = _get_cache(settings, embed_fn=embed_fn)
         if cache:
             cached = cache.get(user_content, model_name)
             if cached:

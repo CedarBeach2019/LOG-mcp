@@ -10,18 +10,26 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 _cache_instance: SemanticCache | None = None
+_cache_embed_fn = None
 
 
-def _get_cache(settings) -> SemanticCache | None:
-    """Get or create the singleton cache instance."""
-    global _cache_instance
+def _get_cache(settings, embed_fn=None) -> SemanticCache | None:
+    """Get or create the singleton cache instance.
+
+    embed_fn can be provided to enable semantic similarity matching.
+    Once set, it's reused for the lifetime of the cache.
+    """
+    global _cache_instance, _cache_embed_fn
     if not getattr(settings, 'cache_enabled', True):
         return None
+    if embed_fn is not None:
+        _cache_embed_fn = embed_fn
     if _cache_instance is None:
         _cache_instance = SemanticCache(
             similarity_threshold=getattr(settings, 'cache_similarity_threshold', 0.85),
             max_entries=getattr(settings, 'cache_max_entries', 1000),
             ttl_hours=getattr(settings, 'cache_ttl_hours', 24),
+            embed_fn=_cache_embed_fn,
         )
     return _cache_instance
 
