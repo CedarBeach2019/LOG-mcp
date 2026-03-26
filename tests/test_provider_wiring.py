@@ -1,7 +1,8 @@
 """Tests for provider registry wiring into call_model."""
 
 import pytest
-from unittest.mock import patch, AsyncMock
+import asyncio
+from unittest.mock import patch, AsyncMock, MagicMock
 from gateway.shared import call_model
 from vault.providers import ProviderConfig, ProviderRegistry, reset_registry
 
@@ -16,34 +17,26 @@ def clean_registry():
 class TestProviderWiring:
     """Test that call_model uses provider registry when available."""
 
-    def test_no_match_falls_back(self):
+    @pytest.mark.asyncio
+    async def test_no_match_falls_back(self):
         """If no provider matches the model, should use the provided endpoint/key."""
-        registry = ProviderRegistry()
-        registry.register(ProviderConfig(
-            name="test_provider",
-            base_url="https://example.com/v1/chat/completions",
-            api_key="test-key",
-            models={"other-model": {"tier": "cheap"}},
-        ))
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "hi"}}]}
+        mock_post = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock(post=mock_post)
 
-        # Call with a model not in any provider — should still work (uses fallback)
-        # We're just testing the resolution logic doesn't crash
-        import asyncio
-        with patch("gateway.shared.get_client") as mock_client:
-            mock_resp = AsyncMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"choices": [{"message": {"content": "hi"}}]}
-            mock_post = AsyncMock(return_value=mock_resp)
-            mock_client.return_value.post = mock_post
-
-            result = asyncio.get_event_loop().run_until_complete(
-                call_model("https://fallback.com/v1/chat/completions", "fallback-key", "unknown-model", [{"role": "user", "content": "hi"}])
+        with patch("gateway.shared.get_client", return_value=mock_client):
+            result = await call_model(
+                "https://fallback.com/v1/chat/completions", "fallback-key",
+                "unknown-model", [{"role": "user", "content": "hi"}]
             )
-            # Should have used the fallback URL, not the provider URL
+            assert result[0] == 200
             call_args = mock_post.call_args
-            assert "fallback.com" in call_args[0][0] or "fallback.com" in str(call_args)
+            assert "fallback.com" in str(call_args)
 
-    def test_provider_match_resolves(self):
+    @pytest.mark.asyncio
+    async def test_provider_match_resolves(self):
         """If a provider has the model, call_model should use its endpoint/key."""
         registry = ProviderRegistry()
         registry.register(ProviderConfig(
@@ -53,19 +46,35 @@ class TestProviderWiring:
             models={"my-model": {"tier": "cheap"}},
         ))
 
-        import asyncio
-        with patch("gateway.shared.get_client") as mock_client:
-            mock_resp = AsyncMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"choices": [{"message": {"content": "hi"}}]}
-            mock_post = AsyncMock(return_value=mock_resp)
-            mock_client.return_value.post = mock_post
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "hi"}}]}
+        mock_post = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock(post=mock_post)
 
-            # Patch get_registry to return our custom registry
+        with patch("gateway.shared.get_client", return_value=mock_client):
             with patch("vault.providers._registry", registry):
-                result = asyncio.get_event_loop().run_until_complete(
-                    call_model("https://fallback.com/v1/chat/completions", "fallback-key", "my-model", [{"role": "user", "content": "hi"}])
+                result = await call_model(
+                    "https://fallback.com/v1/chat/completions", "fallback-key",
+                    "my-model", [{"role": "user", "content": "hi"}]
                 )
+                assert result[0] == 200
                 call_args = mock_post.call_args
-                # Should have used the provider URL, not the fallback
                 assert "provider.example.com" in str(call_args)
+
+    @pytest.mark.asyncio
+    async def test_registry_import_failure_falls_back(self):
+        """If provider registry import fails, fall back gracefully."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "hi"}}]}
+        mock_post = AsyncMock(return_value=mock_resp)
+        mock_client = MagicMock(post=mock_post)
+
+        with patch("gateway.shared.get_client", return_value=mock_client):
+            with patch.dict("sys.modules", {"vault.providers": None}):
+                result = await call_model(
+                    "https://fallback.com/v1/chat/completions", "fallback-key",
+                    "any-model", [{"role": "user", "content": "hi"}]
+                )
+                assert result[0] == 200

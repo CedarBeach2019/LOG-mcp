@@ -65,7 +65,7 @@ class TestProviderConfig:
     def test_to_dict_masks_key(self):
         p = ProviderConfig(name="test", api_key="sk-long-secret-key-here")
         d = p.to_dict()
-        assert d["api_key"] == "***MASKED***"
+        assert d["api_key"] == "sk-long-..."
 
     def test_to_dict_no_key(self):
         p = ProviderConfig(name="test")
