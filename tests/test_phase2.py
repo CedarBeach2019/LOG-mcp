@@ -5,27 +5,8 @@ import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from starlette.testclient import TestClient
-
 os.environ.setdefault("LOG_PASSPHRASE", "testpass")
 os.environ.setdefault("LOG_API_KEY", "sk-test-key")
-
-from gateway.server import app
-
-
-@pytest.fixture(autouse=True)
-def reset_deps(tmp_path):
-    """Reset singletons between tests with fresh DB."""
-    from gateway.deps import reset_all
-    db = str(tmp_path / "test.db")
-    reset_all(db)
-    yield
-    reset_all()
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
 
 
 def _get_token(client):

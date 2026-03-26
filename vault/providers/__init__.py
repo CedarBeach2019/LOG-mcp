@@ -142,7 +142,7 @@ class ProviderConfig:
             "capabilities": self.capabilities,
         }
         if self.api_key:
-            d["api_key"] = self.api_key[:8] + "..."
+            d["api_key"] = "***MASKED***"
         return d
 
     @classmethod

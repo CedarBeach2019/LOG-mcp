@@ -16,9 +16,7 @@ def anyio_backend():
 
 
 @pytest.fixture
-async def auth_token(tmp_path):
-    from gateway.deps import reset_all
-    reset_all(str(tmp_path / "test.db"))
+async def auth_token():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/auth/login", json={"passphrase": "testpass"})
