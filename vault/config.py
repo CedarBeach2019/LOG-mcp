@@ -40,6 +40,9 @@ class VaultSettings(BaseSettings):
     privacy_mode: bool = True
     draft_mode: bool = True  # enable draft round feature
 
+    # Auth
+    jwt_secret: str | None = None  # LOG_JWT_SECRET env var; falls back to DB
+
     # Server
     cors_origins: str = "*"  # comma-separated, "*" for all
     rate_limit: int = 30

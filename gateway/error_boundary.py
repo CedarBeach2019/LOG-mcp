@@ -64,6 +64,28 @@ async def resilient_call(endpoint: str, api_key: str, model: str,
             return status, data, err
 
     # Phase 2: Try fallback (single attempt, no retry)
+    # First try provider registry failover chain
+    try:
+        from vault.providers import get_registry
+        registry = get_registry()
+        chain = registry.get_failover_chain()
+        for provider in chain:
+            # Skip if this is the same provider we already tried
+            if provider.base_url == primary_endpoint:
+                continue
+            logger.info("Trying provider failover: %s", provider.name)
+            auth_headers = provider.get_auth_headers()
+            fb_status, fb_data, fb_err = await call_model(
+                provider.base_url, provider.api_key or api_key,
+                model, messages,
+                timeout=RETRY_TIMEOUT, temperature=temperature, stream=stream,
+            )
+            if fb_status == 200:
+                logger.info("Provider failover to %s succeeded", provider.name)
+                return 200, fb_data, f"(failover: {provider.name})"
+    except Exception:
+        pass
+
     logger.warning("Primary model failed after %d attempts: %s — trying fallback %s",
                  MAX_RETRIES + 1, last_error, fallback_model)
 

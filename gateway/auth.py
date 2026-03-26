@@ -14,6 +14,16 @@ TOKEN_EXPIRY_HOURS = 24
 
 def get_jwt_secret(reallog: RealLog) -> str:
     """Fetch or generate-and-persist the JWT signing secret."""
+    import os
+    import logging
+    _logger = logging.getLogger("gateway.auth")
+
+    # Priority 1: environment variable
+    env_secret = os.environ.get("LOG_JWT_SECRET")
+    if env_secret:
+        return env_secret
+
+    # Priority 2: DB-stored secret
     conn = reallog._get_connection()
     row = conn.execute(
         "SELECT value FROM user_preferences WHERE key = ?",
@@ -22,6 +32,8 @@ def get_jwt_secret(reallog: RealLog) -> str:
     if row:
         return row["value"]
 
+    # No secret anywhere — generate and persist (first run)
+    _logger.warning("JWT secret not found in env (LOG_JWT_SECRET) or DB — generating new one")
     secret = secrets.token_urlsafe(32)
     conn.execute(
         "INSERT INTO user_preferences (key, value) VALUES (?, ?)",

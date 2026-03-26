@@ -100,6 +100,12 @@ class RealLog:
         # Create a persistent connection
         self._conn = None
         self._init_db()
+        # Run any pending DB migrations
+        try:
+            from vault.migrations import run_migrations_on_reallog
+            run_migrations_on_reallog(self)
+        except Exception as exc:
+            logger.warning("Migration check failed (non-critical): %s", exc)
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create a persistent database connection."""

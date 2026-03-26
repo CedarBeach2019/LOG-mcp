@@ -35,6 +35,7 @@ from gateway.routes import (
     adaptive_suggest,
     model_catalog,
     model_download,
+    migrate,
     preferences_delete,
     preferences_list,
     preferences_set,
@@ -57,11 +58,58 @@ from gateway.routes import (
 
 from gateway.tracing import TracingMiddleware
 from gateway.startup import validate_startup
+from gateway.rate_limit import get_limiter
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Startup validation
 from gateway.deps import get_settings
+import os
+import logging
+_logger = logging.getLogger("gateway.server")
+
 _settings = get_settings()
 _startup_warnings = validate_startup(_settings)
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Enforce rate limits per client IP."""
+
+    async def dispatch(self, request, call_next):
+        if request.url.path in ("/", "/v1/health"):
+            return await call_next(request)
+        client_ip = request.client.host if request.client else "unknown"
+        limiter = get_limiter()
+        allowed, info = limiter.check(client_ip)
+        if not allowed:
+            from starlette.responses import JSONResponse
+            resp = JSONResponse(
+                {"error": "rate limited", "reason": info.get("reason", ""),
+                 "limit": info["limit"], "reset_at": info["reset_at"]},
+                status_code=429,
+            )
+            resp.headers["X-RateLimit-Limit"] = str(info["limit"])
+            resp.headers["X-RateLimit-Remaining"] = "0"
+            return resp
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(info["limit"])
+        response.headers["X-RateLimit-Remaining"] = str(info["remaining"])
+        return response
+
+
+class BodySizeMiddleware(BaseHTTPMiddleware):
+    """Reject request bodies exceeding LOG_MAX_BODY_SIZE (default 1MB)."""
+
+    async def dispatch(self, request, call_next):
+        max_size = int(os.environ.get("LOG_MAX_BODY_SIZE", str(1024 * 1024)))
+        if request.method in ("POST", "PUT", "PATCH"):
+            cl = request.headers.get("content-length")
+            if cl and int(cl) > max_size:
+                from starlette.responses import JSONResponse
+                return JSONResponse(
+                    {"error": f"request body too large (max {max_size} bytes)"},
+                    status_code=413,
+                )
+        return await call_next(request)
 
 routes = [
     Route("/", serve_index, methods=["GET"]),
@@ -109,6 +157,7 @@ routes = [
     Route("/v1/adaptive/suggest", adaptive_suggest, methods=["GET"]),
     Route("/v1/local/catalog", model_catalog, methods=["GET"]),
     Route("/v1/local/download", model_download, methods=["POST"]),
+    Route("/v1/maintenance/migrate", migrate, methods=["POST"]),
     Route("/v1/prompt/templates", prompt_templates_list, methods=["GET"]),
     Route("/v1/prompt/template/{name}", prompt_template_update, methods=["PUT"]),
     Route("/v1/prompt/preview", prompt_preview, methods=["POST"]),
@@ -156,9 +205,22 @@ app = Starlette(routes=routes, on_shutdown=[_on_shutdown],
                  exception_handlers={404: _not_found, 405: _method_not_allowed})
 
 app.add_middleware(TracingMiddleware)
+
+# CORS: default to localhost:8000, only wildcard if explicitly set
+_cors_env = os.environ.get("LOG_CORS_ORIGINS", "")
+if _cors_env == "*":
+    _logger.warning("CORS set to wildcard (*) — this allows all origins")
+    _cors_origins = ["*"]
+elif _cors_env:
+    _cors_origins = [o.strip() for o in _cors_env.split(",")]
+else:
+    _cors_origins = ["http://localhost:8000"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_settings.cors_origins.split(",") if _settings.cors_origins != "*" else ["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(BodySizeMiddleware)
+app.add_middleware(RateLimitMiddleware)

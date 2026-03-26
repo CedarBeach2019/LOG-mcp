@@ -47,23 +47,41 @@ def authenticate(request: Request) -> JSONResponse | None:
 async def call_model(endpoint: str, api_key: str, model: str,
                      messages: list[dict], timeout: float = 60.0,
                      temperature: float | None = None,
-                     stream: bool = False):
+                     stream: bool = False,
+                     extra_params: dict | None = None):
     """Call an OpenAI-compatible API.
 
     Returns (status_code, json_data, error_str) for non-streaming.
     Returns (200, async_generator, "") for streaming.
     """
+    # Try provider registry for model-specific endpoint/key
+    resolved_endpoint = endpoint
+    resolved_key = api_key
+    try:
+        from vault.providers import get_registry
+        registry = get_registry()
+        provider = registry.get_provider_for_model(model)
+        if provider and provider.api_key and provider.base_url:
+            resolved_endpoint = provider.base_url
+            resolved_key = provider.api_key
+    except Exception:
+        pass  # fall back to provided endpoint/key
+
     try:
         body: dict = {"model": model, "messages": messages}
         if temperature is not None:
             body["temperature"] = temperature
+        # Pass through OpenAI-compatible params if present
+        for param in ("max_tokens", "top_p", "stop", "frequency_penalty", "presence_penalty"):
+            if extra_params and param in extra_params:
+                body[param] = extra_params[param]
         if stream:
             body["stream"] = True
             client = get_client()
             req = client.build_request(
-                "POST", endpoint,
+                "POST", resolved_endpoint,
                 headers={
-                    "Authorization": f"Bearer {api_key}",
+                    "Authorization": f"Bearer {resolved_key}",
                     "Content-Type": "application/json",
                 },
                 json=body,
@@ -76,9 +94,9 @@ async def call_model(endpoint: str, api_key: str, model: str,
 
         client = get_client()
         resp = await client.post(
-            endpoint,
+            resolved_endpoint,
             headers={
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {resolved_key}",
                 "Content-Type": "application/json",
             },
             json=body,

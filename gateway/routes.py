@@ -6,6 +6,7 @@ All handlers delegate to gateway/api_*.py modules.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import time
 from pathlib import Path
@@ -38,7 +39,7 @@ async def login(request: Request):
 
     passphrase = body.get("passphrase", "")
     settings = get_settings()
-    if passphrase != settings.passphrase:
+    if not hmac.compare_digest(passphrase, settings.passphrase):
         from starlette.responses import JSONResponse
         return JSONResponse({"error": "invalid passphrase"}, status_code=401)
 
@@ -88,7 +89,7 @@ async def health(request: Request):
         base = base.rsplit("/v1", 1)[0] if "/v1" in base else base
         resp = await client.get(f"{base}/models", timeout=5.0,
                                 headers={"Authorization": f"Bearer {settings.api_key}"})
-        results["checks"]["api_key"] = {"ok": resp.status_code in (200, 401, 403)}  # reachable
+        results["checks"]["api_key"] = {"ok": resp.status_code == 200}
     except Exception as exc:
         results["checks"]["api_key"] = {"ok": False, "error": str(exc)[:80]}
         results["status"] = "degraded"
@@ -396,11 +397,16 @@ async def chat_completions(request: Request):
                 "latency_ms": latency,
             })
 
+    _extra = {k: v for k in ("max_tokens", "top_p", "stop", "frequency_penalty", "presence_penalty")
+              if k in body}
+
     if endpoint_type == "compare":
         cheap_status, cheap_data, cheap_err = await call_model(
-            settings.cheap_model_endpoint, api_key, settings.cheap_model_name, upstream_messages)
+            settings.cheap_model_endpoint, api_key, settings.cheap_model_name, upstream_messages,
+            extra_params=_extra)
         esc_status, esc_data, esc_err = await call_model(
-            settings.escalation_model_endpoint, api_key, settings.escalation_model_name, upstream_messages)
+            settings.escalation_model_endpoint, api_key, settings.escalation_model_name, upstream_messages,
+            extra_params=_extra)
         cheap_latency = int((time.time() - t0) * 1000)
 
         if cheap_status == 200 and cheap_data:
@@ -413,7 +419,8 @@ async def chat_completions(request: Request):
             escalation_response = esc_data["choices"][0]["message"]["content"]
             escalation_latency = int((time.time() - t0) * 1000)
     else:
-        status, data, err = await call_model(endpoint, api_key, model_name, upstream_messages)
+        status, data, err = await call_model(endpoint, api_key, model_name, upstream_messages,
+                                              extra_params=_extra)
         latency = int((time.time() - t0) * 1000)
         if status != 200 or data is None:
             return JSONResponse({"error": err or "unknown error"}, status_code=502)
@@ -682,11 +689,19 @@ async def _stream_chat(settings, reallog, dehydrator, rehydrator,
     from datetime import datetime
     from vault.core import Message
     import json
+    import asyncio
+    import os
 
+    _stream_extra = {k: v for k in ("max_tokens", "top_p", "stop", "frequency_penalty", "presence_penalty")
+                     if k in body}
     status, lines, err = await call_model(endpoint, api_key, model_name,
-                                           upstream_messages, stream=True)
+                                           upstream_messages, stream=True,
+                                           extra_params=_stream_extra)
     if status != 200 or lines is None:
         return JSONResponse({"error": err or "stream failed"}, status_code=502)
+
+    import os
+    _stream_timeout = int(os.environ.get("LOG_STREAM_TIMEOUT", "120"))
 
     full_text = ""
 
@@ -728,6 +743,18 @@ async def _stream_chat(settings, reallog, dehydrator, rehydrator,
                 except Exception:
                     pass
 
+    async def timed_generate():
+        try:
+            start = asyncio.get_event_loop().time()
+            async for chunk in generate():
+                if asyncio.get_event_loop().time() - start > _stream_timeout:
+                    yield f"data: {json.dumps({'error': 'streaming timed out'})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    break
+                yield chunk
+        except Exception:
+            pass
+
     route_meta = json.dumps({
         "action": route["action"], "reason": route.get("reason", ""),
         "target_model": model_name, "confidence": route.get("confidence", 0),
@@ -735,7 +762,7 @@ async def _stream_chat(settings, reallog, dehydrator, rehydrator,
     })
 
     return StreamingResponse(
-        generate(),
+        timed_generate(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -1510,7 +1537,7 @@ async def config_get(request: Request):
         "cheap_model_name": s.cheap_model_name,
         "escalation_model_endpoint": s.escalation_model_endpoint,
         "escalation_model_name": s.escalation_model_name,
-        "api_key": s.api_key[:8] + "..." if s.api_key else None,
+        "api_key": "***MASKED***" if s.api_key else None,
         "privacy_mode": s.privacy_mode,
         "cache_enabled": s.cache_enabled,
         "cache_similarity_threshold": s.cache_similarity_threshold,
@@ -1823,3 +1850,22 @@ async def model_download(request: Request):
     result = download_model(model_key, Path(s.local_models_dir), quant)
     status = 200 if result.get("success") else 400
     return JSONResponse(result, status_code=status)
+
+
+# ---------------------------------------------------------------------------
+# Maintenance
+# ---------------------------------------------------------------------------
+
+async def migrate(request: Request):
+    """POST /v1/maintenance/migrate — manually trigger DB migrations."""
+    from starlette.responses import JSONResponse
+    auth_err = authenticate(request)
+    if auth_err is not None:
+        return auth_err
+    try:
+        from vault.migrations import run_migrations_on_reallog
+        reallog = get_reallog()
+        version = run_migrations_on_reallog(reallog)
+        return JSONResponse({"ok": True, "schema_version": version})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
